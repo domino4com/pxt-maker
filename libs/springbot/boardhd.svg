@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="600" height="400" viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
+  <title>Springbot boardhd.svg (for MakeCode Board Designer)</title>
+  <rect id="BOARD_OUTLINE" x="40" y="40" width="520" height="320" rx="20" ry="20" fill="#f5f5f5" stroke="#333" stroke-width="2"/>
+
+  <!-- ===== Edge connector row (bottom) — micro:bit style labels ===== -->
+  <!-- Arrange 0..16 plus power pins; Board Designer uses text content as the pin name -->
+  <!-- Left-to-right spacing 28 px -->
+  <g id="EDGE_CONNECTOR">
+    <!-- Power pads -->
+    <circle id="GND_PAD" cx="80" cy="350" r="8" fill="#ddd" stroke="#333"/>
+    <text x="80" y="372" font-size="10" text-anchor="middle">GND</text>
+
+    <circle id="VCC_PAD" cx="110" cy="350" r="8" fill="#ddd" stroke="#333"/>
+    <text x="110" y="372" font-size="10" text-anchor="middle">3V</text>
+
+    <!-- P0..P16 -->
+    <!-- (positions chosen to be legible; Board Designer will capture x/y) -->
+    <!-- P0 -->
+    <circle cx="150" cy="350" r="8" fill="#fff" stroke="#333"/><text x="150" y="372" font-size="10" text-anchor="middle">P0</text>
+    <!-- P1 -->
+    <circle cx="178" cy="350" r="8" fill="#fff" stroke="#333"/><text x="178" y="372" font-size="10" text-anchor="middle">P1</text>
+    <!-- P2 -->
+    <circle cx="206" cy="350" r="8" fill="#fff" stroke="#333"/><text x="206" y="372" font-size="10" text-anchor="middle">P2</text>
+    <!-- P3 (nc) -->
+    <circle cx="234" cy="350" r="8" fill="#fff" stroke="#999"/><text x="234" y="372" font-size="10" text-anchor="middle">P3</text>
+    <!-- P4 -->
+    <circle cx="262" cy="350" r="8" fill="#fff" stroke="#333"/><text x="262" y="372" font-size="10" text-anchor="middle">P4</text>
+    <!-- P5 (nc) -->
+    <circle cx="290" cy="350" r="8" fill="#fff" stroke="#999"/><text x="290" y="372" font-size="10" text-anchor="middle">P5</text>
+    <!-- P6 -->
+    <circle cx="318" cy="350" r="8" fill="#fff" stroke="#333"/><text x="318" y="372" font-size="10" text-anchor="middle">P6</text>
+    <!-- P7 (UART RXD) -->
+    <circle cx="346" cy="350" r="8" fill="#fff" stroke="#333"/><text x="346" y="372" font-size="10" text-anchor="middle">P7</text>
+    <!-- P8 (RESET) -->
+    <circle cx="374" cy="350" r="8" fill="#fff" stroke="#333"/><text x="374" y="372" font-size="10" text-anchor="middle">P8</text>
+    <!-- P9..P12 (nc) -->
+    <circle cx="402" cy="350" r="8" fill="#fff" stroke="#999"/><text x="402" y="372" font-size="10" text-anchor="middle">P9</text>
+    <circle cx="430" cy="350" r="8" fill="#fff" stroke="#999"/><text x="430" y="372" font-size="10" text-anchor="middle">P10</text>
+    <circle cx="458" cy="350" r="8" fill="#fff" stroke="#999"/><text x="458" y="372" font-size="10" text-anchor="middle">P11</text>
+    <circle cx="486" cy="350" r="8" fill="#fff" stroke="#999"/><text x="486" y="372" font-size="10" text-anchor="middle">P12</text>
+    <!-- P13=SCK, P14=MISO, P15=MOSI, P16=UART TXD -->
+    <circle cx="514" cy="350" r="8" fill="#fff" stroke="#333"/><text x="514" y="372" font-size="10" text-anchor="middle">P13</text>
+    <circle cx="542" cy="350" r="8" fill="#fff" stroke="#333"/><text x="542" y="372" font-size="10" text-anchor="middle">P14</text>
+    <circle cx="570" cy="350" r="8" fill="#fff" stroke="#333"/><text x="570" y="372" font-size="10" text-anchor="middle">P15</text>
+    <!-- P16 placed above to fit -->
+    <circle cx="570" cy="322" r="8" fill="#fff" stroke="#333"/><text x="570" y="314" font-size="10" text-anchor="middle">P16</text>
+  </g>
+
+  <!-- ===== I2C pads (top) ===== -->
+  <g id="I2C_HEADER">
+    <circle cx="100" cy="60" r="8" fill="#fff" stroke="#333"/><text x="100" y="40" font-size="10" text-anchor="middle">SDA</text>
+    <circle cx="130" cy="60" r="8" fill="#fff" stroke="#333"/><text x="130" y="40" font-size="10" text-anchor="middle">SCL</text>
+    <circle cx="160" cy="60" r="8" fill="#ddd" stroke="#333"/><text x="160" y="40" font-size="10" text-anchor="middle">3V</text>
+    <circle cx="190" cy="60" r="8" fill="#ddd" stroke="#333"/><text x="190" y="40" font-size="10" text-anchor="middle">GND</text>
+  </g>
+
+  <!-- ===== Buttons (front: touch A/B/Logo), back: BOOT, RESET ===== -->
+  <g id="BUTTONS">
+    <rect id="BTN_A" x="260" y="70" width="30" height="18" rx="4" ry="4" fill="#e0f7fa" stroke="#333"/>
+    <text x="275" y="65" font-size="10" text-anchor="middle">A</text>
+
+    <rect id="BTN_B" x="310" y="70" width="30" height="18" rx="4" ry="4" fill="#e0f7fa" stroke="#333"/>
+    <text x="325" y="65" font-size="10" text-anchor="middle">B</text>
+
+    <rect id="BTN_LOGO" x="360" y="70" width="40" height="18" rx="4" ry="4" fill="#e0f7fa" stroke="#333"/>
+    <text x="380" y="65" font-size="10" text-anchor="middle">LOGO</text>
+
+    <circle id="BTN_BOOT" cx="530" cy="90" r="10" fill="#fff" stroke="#333"/>
+    <text x="530" y="112" font-size="10" text-anchor="middle">BOOT</text>
+
+    <circle id="RST" cx="560" cy="90" r="10" fill="#fff" stroke="#333"/>
+    <text x="560" y="112" font-size="10" text-anchor="middle">RST</text>
+  </g>
+
+  <!-- ===== Indicators: red LED + NeoPixel ===== -->
+  <g id="INDICATORS">
+    <circle id="REDLED" cx="70" cy="300" r="6" fill="#ffdddd" stroke="#900"/>
+    <text x="70" y="290" font-size="10" text-anchor="middle">RED</text>
+
+    <circle id="NEOPIXEL" cx="100" cy="300" r="6" fill="#ddeeff" stroke="#006"/>
+    <text x="100" y="290" font-size="10" text-anchor="middle">NEO</text>
+  </g>
+
+  <!-- ===== 5x5 LED Matrix (LED0..LED24) ===== -->
+  <g id="LED_MATRIX">
+    <!-- grid 5x5, top-left LED0, row-major -->
+    <!-- cell size 18px, start at (250,140) -->
+    <!-- IDs LED0..LED24 -->
+    <g id="ROW0">
+      <circle id="LED0" cx="250" cy="140" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED1" cx="268" cy="140" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED2" cx="286" cy="140" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED3" cx="304" cy="140" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED4" cx="322" cy="140" r="6" fill="#eee" stroke="#333"/>
+    </g>
+    <g id="ROW1">
+      <circle id="LED5"  cx="250" cy="158" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED6"  cx="268" cy="158" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED7"  cx="286" cy="158" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED8"  cx="304" cy="158" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED9"  cx="322" cy="158" r="6" fill="#eee" stroke="#333"/>
+    </g>
+    <g id="ROW2">
+      <circle id="LED10" cx="250" cy="176" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED11" cx="268" cy="176" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED12" cx="286" cy="176" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED13" cx="304" cy="176" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED14" cx="322" cy="176" r="6" fill="#eee" stroke="#333"/>
+    </g>
+    <g id="ROW3">
+      <circle id="LED15" cx="250" cy="194" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED16" cx="268" cy="194" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED17" cx="286" cy="194" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED18" cx="304" cy="194" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED19" cx="322" cy="194" r="6" fill="#eee" stroke="#333"/>
+    </g>
+    <g id="ROW4">
+      <circle id="LED20" cx="250" cy="212" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED21" cx="268" cy="212" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED22" cx="286" cy="212" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED23" cx="304" cy="212" r="6" fill="#eee" stroke="#333"/>
+      <circle id="LED24" cx="322" cy="212" r="6" fill="#eee" stroke="#333"/>
+    </g>
+  </g>
+</svg>
