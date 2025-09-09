@@ -34,5 +34,12 @@
     "autoRun": true,
     "boardDefinition": "springbot"
   },
-  "microbitCSS": false
+  "microbitCSS": false,
+  "card": {
+    "name": "Springbot (ESP32-S2)",
+    "displayName": "Springbot (ESP32-S2)",
+    "description": "ESP32-S2 micro:bit-style board with 5×5 LED matrix, touch A/B/Logo, UF2 + WebUSB.",
+    "imageUrl": "/static/libs/springbot.jpg",
+    "learnMoreUrl": "/boards/springbot"
+  }
 }
