@@ -1,0 +1,38 @@
+{
+  "name": "springbot",
+  "description": "Springbot board (ESP32-S2) — micro:bit-style board with 5x5 LED matrix, touch A/B/Logo, UF2 + WebUSB",
+  "files": [
+    "config.ts",
+    "device.d.ts",
+    "board.json",
+    "board.svg",
+    "README.md"
+  ],
+  "testFiles": [],
+  "public": true,
+  "preferredEditor": "blocksprj",
+  "features": [
+    "ledmatrix",
+    "neopixel",
+    "buttons",
+    "touch",
+    "i2c",
+    "spi",
+    "serial",
+    "music",
+    "sensors"
+  ],
+  "coreDependencies": {
+    "pxt-core": "file:../pxt",
+    "pxt-common-packages": "file:../pxt-common-packages"
+  },
+  "dependencies": {
+    "device": "*"
+  },
+  "compileServiceVariant": "esp32s2",
+  "simulator": {
+    "autoRun": true,
+    "boardDefinition": "springbot"
+  },
+  "microbitCSS": false
+}
