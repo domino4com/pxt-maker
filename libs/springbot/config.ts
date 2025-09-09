@@ -59,20 +59,13 @@ const PIN_NFC_INT    = 46; // NFC interrupt (ST25DV @I2C, int also on 46)
 const PIN_SPEAKER = 15; // buzzer (PWM capable pin recommended)
 
 // ----- 5x5 LED matrix (ROW anodes, COL cathodes — confirm polarity) -----
-// You wrote:
-//  Rows (1..5) = GPIO8, 40, 3, 38, 33
-//  Cols (1..5) = GPIO3, 42, 41, 6, 7
-// -> Conflict: GPIO3 appears in both lists.
-// Prior mapping seen: Rows 1..5 = 8,9,10,14,33; Cols 1..5 = 3,4,5,6,7
-// TODO(Bjarke): please confirm the correct final mapping. Using your latest with a FIXME.
-
 const LED_ROW1 = 8;
 const LED_ROW2 = 40;
-const LED_ROW3 = 3;   // FIXME: conflicts with COL1 below if COL1 is also 3
+const LED_ROW3 = 10;
 const LED_ROW4 = 38;
 const LED_ROW5 = 33;
 
-const LED_COL1 = 3;   // FIXME: conflicts with ROW3 above
+const LED_COL1 = 3;
 const LED_COL2 = 42;
 const LED_COL3 = 41;
 const LED_COL4 = 6;
