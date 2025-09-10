@@ -64,7 +64,7 @@ steps:
         rm -f package-lock.json || true
         npm install
 
-  # 5) Prune non-ESP MCUs & connectivity libs (your script)
+  # 5) Prune non-ESP MCUs & connectivity libs
   - name: node:18
     id: Prune for ESP32-S2 (springbot)
     entrypoint: bash
@@ -84,11 +84,17 @@ steps:
       - -lc
       - |
         set -euxo pipefail
-        # Reinstall after pruning in case files changed
+
+        # Safety: ensure no old installs block the symlink replacement
+        rm -rf node_modules/pxt-core node_modules/pxt || true
+        # (If anything nested got pulled in earlier, clear them too)
+        rm -rf pxt/node_modules pxt-common-packages/node_modules || true
+
+        # Make sure the target deps are still present after pruning
         rm -f package-lock.json || true
         npm install
 
-        # Link to local clones
+        # Link to the local clones
         npx pxt link ./pxt
         npx pxt link ./pxt-common-packages
 
