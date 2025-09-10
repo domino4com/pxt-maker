@@ -38,9 +38,9 @@ steps:
   args: ['-lc', 'set -euo pipefail; npm install' ]
 
 # Install deps for your pxt-maker fork (repo root)
-# - Install libudev headers so native 'usb' can compile if it still appears.
-# - Also pass --no-optional to skip optional native deps we don’t need for static site.
-# - Silence Browserslist “outdated” warnings to reduce noise.
+# - Install libudev headers for optional native 'usb'
+# - Omit optional deps to reduce native builds
+# - Silence Browserslist noise
 - name: 'node:18'
   entrypoint: 'bash'
   args:
@@ -54,13 +54,16 @@ steps:
       rm -rf /var/lib/apt/lists/*
       npm install --no-optional
 
-# Link local pxt + common packages into this target (via npx)
+# 🔧 NEW: Pre-clean installed copies before linking; then link local repos
 - name: 'node:18'
   entrypoint: 'bash'
   args:
     - -lc
     - |
       set -euo pipefail
+      # remove installed packages so pxt link can replace them with symlinks
+      rm -rf node_modules/pxt-core node_modules/pxt_common_packages node_modules/pxt-common-packages || true
+      # link local sources
       npx pxt link ./pxt
       npx pxt link ./pxt-common-packages
 
