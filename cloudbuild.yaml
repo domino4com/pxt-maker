@@ -46,7 +46,7 @@ steps:
         cd pxt-common-packages
         npm install --omit=dev
 
-  # 3) Install target (your pxt-maker in repo root) + system deps for optional native modules
+  # 3) Install target (repo root) + system deps for optional native modules
   - name: node:18
     id: Install target deps (pxt-maker)
     entrypoint: bash
@@ -77,7 +77,9 @@ steps:
         cat > scripts/prune-for-esp32s2.sh <<'BASH'
         #!/usr/bin/env bash
         set -euxo pipefail
-        : "${ENABLE_CONNECTIVITY:?missing}"   # ensure env var is provided by the step
+
+        # Ensure env var provided
+        test -n "$ENABLE_CONNECTIVITY" || { echo "ERROR: ENABLE_CONNECTIVITY missing"; exit 1; }
 
         # 1) Drop other MCU variants (rp2040/samd/stm32/nrf52)
         pushd pxt-common-packages/libs
@@ -85,7 +87,7 @@ steps:
         rm -rf core---rp2040 core---samd mixer---samd mixer---stm32 mixer---nrf52 || true
 
         # 2) Connectivity toggle
-        if [ "${ENABLE_CONNECTIVITY}" != "1" ]; then
+        if [ "$ENABLE_CONNECTIVITY" != "1" ]; then
           rm -rf azureiot mqtt net net-game radio radio-broadcast lora || true
         else
           rm -rf radio radio-broadcast lora || true
