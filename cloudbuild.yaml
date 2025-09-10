@@ -34,7 +34,7 @@ steps:
         npm install
         npm run build
 
-  # 2) Install pxt-common-packages (omit dev to avoid @types/node bleed)
+  # 2) Install pxt-common-packages
   - name: node:18
     id: Install pxt-common-packages
     entrypoint: bash
@@ -46,7 +46,7 @@ steps:
         cd pxt-common-packages
         npm install --omit=dev
 
-  # 3) Install target deps (repo root) + system deps for any native module builds
+  # 3) Install target deps (repo root) + system deps for native module builds
   - name: node:18
     id: Install target deps (pxt-maker)
     entrypoint: bash
@@ -61,7 +61,44 @@ steps:
         rm -rf /var/lib/apt/lists/*
         npm install --no-optional
 
-  # 4) Prune to ESP32-S2 only and drop AzureIoT/MQTT/Net for now
+  # 4) Ensure prune script exists and is executable (self-healing)
+  - name: node:18
+    id: Ensure prune script
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        mkdir -p scripts
+        if [ ! -s scripts/prune-for-esp32s2.sh ]; then
+          cat > scripts/prune-for-esp32s2.sh <<'BASH'
+#!/usr/bin/env bash
+set -euxo pipefail
+
+# 1) Drop non-ESP MCUs (rp2040/samd/stm32/nrf52)
+pushd pxt-common-packages/libs
+find . -maxdepth 1 -type d \( -name '*---rp2040' -o -name '*---samd' -o -name '*---stm32' -o -name '*---nrf52' \) -print0 | xargs -0 rm -rf || true
+rm -rf core---rp2040 core---samd mixer---samd mixer---stm32 mixer---nrf52 || true
+
+# 2) Always remove connectivity stacks for now (re-enable later)
+rm -rf azureiot mqtt net net-game radio radio-broadcast lora || true
+popd
+
+# 3) Prevent Node typings from polluting TS build
+rm -rf node_modules/@types/node || true
+rm -rf pxt-common-packages/node_modules/@types/node || true
+rm -rf pxt/node_modules/@types/node || true
+
+# 4) Remove settings overrides targeting other DALs (harmless if absent)
+find pxt-common-packages -path '*/settings/targetoverrides.ts' -print0 | xargs -0 rm -f || true
+
+echo "Prune complete. Remaining libs:"
+ls -1 pxt-common-packages/libs || true
+BASH
+        fi
+        chmod +x scripts/prune-for-esp32s2.sh
+
+  # 5) Prune non-ESP MCUs & connectivity libs
   - name: node:18
     id: Prune non-ESP MCUs & connectivity libs
     entrypoint: bash
@@ -69,13 +106,9 @@ steps:
       - -lc
       - |
         set -euo pipefail
-        if [ -x scripts/prune-for-esp32s2.sh ]; then
-          ./scripts/prune-for-esp32s2.sh
-        else
-          echo "scripts/prune-for-esp32s2.sh missing or not executable"; exit 1
-        fi
+        ./scripts/prune-for-esp32s2.sh
 
-  # 5) Link local pxt repos into the target
+  # 6) Link local pxt repos into the target
   - name: node:18
     id: Link local pxt repos
     entrypoint: bash
@@ -83,12 +116,11 @@ steps:
       - -lc
       - |
         set -euo pipefail
-        # Remove installed copies so 'pxt link' can create symlinks
         rm -rf node_modules/pxt-core node_modules/pxt_common_packages node_modules/pxt-common-packages || true
         npx pxt link ./pxt
         npx pxt link ./pxt-common-packages
 
-  # 6) Build static package (Springbot target only) → ./site
+  # 7) Build static package → ./site
   - name: node:18
     id: Build static site (Springbot)
     entrypoint: bash
@@ -101,7 +133,7 @@ steps:
         export PXT_NO_UPDATE=1
         npx pxt staticpkg --githubpages --output ./site
 
-  # 7) Write minimal firebase.json to serve ./site
+  # 8) Write minimal firebase.json to serve ./site
   - name: 'node:18'
     id: Write firebase.json
     entrypoint: bash
@@ -123,7 +155,7 @@ steps:
         }
         JSON
 
-  # 8) Deploy to Firebase Hosting with FIREBASE_TOKEN
+  # 9) Deploy to Firebase Hosting (requires FIREBASE_TOKEN in Secret Manager)
   - name: 'node:18'
     id: Deploy to Firebase Hosting
     entrypoint: bash
