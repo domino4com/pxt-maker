@@ -86,3 +86,5 @@ steps:
         firebase deploy --only hosting --project=${_FIREBASE_PROJECT} --site=${_FIREBASE_SITE}
 
 timeout: "3600s"
+options:
+  logging: CLOUD_LOGGING_ONLY
