@@ -1,90 +1,128 @@
-# cloudbuild.yaml for building PXT Maker (ESP32-S2 only)
+# Cloud Build for Springbot MakeCode (ESP32-S2 only)
+# Substitutions expected on the trigger:
+#   _FIREBASE_PROJECT : springbot-co-za
+#   _FIREBASE_SITE    : springbot
+#   _GITHUB_ORG       : domino4com
 
-substitutions:
-  _FIREBASE_PROJECT: springbot-co-za
-  _FIREBASE_SITE: springbot
-  _GITHUB_ORG: domino4com
+timeout: "120m"
 
 steps:
-  # Step 0: Clone pxt
-  - name: gcr.io/cloud-builders/git
-    args: ["clone", "https://github.com/microsoft/pxt", "pxt"]
+# 0) Clone pxt (core)
+- name: gcr.io/cloud-builders/git
+  id: Clone pxt
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -euxo pipefail
+      git clone https://github.com/$_GITHUB_ORG/pxt.git
 
-  # Step 1: Clone pxt-common-packages
-  - name: gcr.io/cloud-builders/git
-    args: ["clone", "https://github.com/microsoft/pxt-common-packages", "pxt-common-packages"]
+# 1) Clone pxt-common-packages (shared libs)
+- name: gcr.io/cloud-builders/git
+  id: Clone pxt-common-packages
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -euxo pipefail
+      git clone https://github.com/$_GITHUB_ORG/pxt-common-packages.git
 
-  # Step 2: Build pxt core
-  - name: node:18
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        npm install -g gulp npx
-        (cd pxt && npm ci && npm run build)
+# 2) Build pxt core (NO global npm/npx; NO npm ci without lockfile)
+- name: node:18
+  id: Build pxt core
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -euxo pipefail
+      node -v
+      npm -v
+      cd pxt
+      if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      # pxt-core defines "build": "gulp"
+      npm run build
 
-  # Step 3: Install pxt-common-packages
-  - name: node:18
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        (cd pxt-common-packages && npm ci)
+# 3) Install pxt-common-packages deps (no ci unless lockfile present)
+- name: node:18
+  id: Install pxt-common-packages
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -euxo pipefail
+      cd pxt-common-packages
+      if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-  # Step 4: Install target deps (pxt-maker)
-  - name: node:18
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        apt-get update && apt-get install -y python3 pkg-config build-essential libudev-dev
-        (cd pxt-maker && npm ci)
+# 4) Install target deps (pxt-maker)
+- name: node:18
+  id: Install target deps (pxt-maker)
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -euxo pipefail
+      # Repo being built is already in /workspace
+      # Ensure local tooling needed by target (includes webusb helpers)
+      if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-  # Step 5: Prune non-ESP MCUs & connectivity libs
-  - name: node:18
-    entrypoint: bash
-    args:
-      - -c
-      - |
+# 5) Prune to ESP32-S2 only (and drop azureiot/mqtt/net for now)
+- name: node:18
+  id: Prune non-ESP MCUs & connectivity libs
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -euxo pipefail
+      if [ -f scripts/prune-for-esp32s2.sh ]; then
         chmod +x scripts/prune-for-esp32s2.sh
-        ./scripts/prune-for-esp32s2.sh
+        scripts/prune-for-esp32s2.sh
+      else
+        echo "WARN: scripts/prune-for-esp32s2.sh not found; skipping prune"
+      fi
 
-  # Step 6: Build static site for ESP32-S2
-  - name: node:18
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        (cd pxt-maker && pxt link ../pxt && pxt link ../pxt-common-packages)
-        (cd pxt-maker && pxt staticpkg --githubpages --output ../site)
+# 6) Link pxt + common-packages into target and build static package
+- name: node:18
+  id: Build site
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -euxo pipefail
+      # Local install of pxt CLI in the workspace (no global install)
+      # (node:18 already has npx, so we can run npx pxt ...)
+      # First, make sure pxt-maker has its deps
+      if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-  # Step 7: Create firebase.json for hosting
-  - name: bash
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        cat > firebase.json <<'JSON'
-        {
-          "hosting": {
-            "public": "site",
-            "ignore": [
-              "firebase.json",
-              "**/.*",
-              "**/node_modules/**"
-            ]
-          }
+      # Link target to locally-cloned pxt repos
+      npx pxt link ./pxt
+      npx pxt link ./pxt-common-packages
+
+      # Build static site
+      npx pxt staticpkg --githubpages --output ./site
+
+      # Minimal firebase.json for Hosting (serve ./site)
+      cat > firebase.json <<'JSON'
+      {
+        "hosting": {
+          "public": "site",
+          "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
         }
-        JSON
+      }
+      JSON
 
-  # Step 8: Deploy to Firebase Hosting
-  - name: gcr.io/firebase-extensions/firebase-cli
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        firebase deploy --only hosting --project=${_FIREBASE_PROJECT} --site=${_FIREBASE_SITE}
+# 7) Deploy to Firebase Hosting (Hosting REST via CLI — no local login)
+- name: gcr.io/firebase-tools/cli
+  id: Deploy to Firebase Hosting
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -euxo pipefail
+      # Use the service account that the Cloud Build trigger runs as;
+      # the official firebase-tools image respects ADC automatically.
+      # Note: SITE is optional if you only have one site on the project.
+      firebase --project "$_FIREBASE_PROJECT" deploy --only hosting:"$_FIREBASE_SITE"
 
-timeout: "3600s"
+# Option A: Cloud Logging only (no GCS logs bucket required)
 options:
   logging: CLOUD_LOGGING_ONLY
