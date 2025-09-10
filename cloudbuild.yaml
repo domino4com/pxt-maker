@@ -20,7 +20,7 @@ steps:
 - name: 'gcr.io/cloud-builders/git'
   args: ['clone', 'https://github.com/${_GITHUB_ORG}/pxt-common-packages', 'pxt-common-packages']
 
-# Build PXT core (use npm install instead of npm ci)
+# Build PXT core (npm install; not ci, since upstream often has no lockfile)
 - name: 'node:18'
   dir: 'pxt'
   entrypoint: 'bash'
@@ -38,9 +38,21 @@ steps:
   args: ['-lc', 'set -euo pipefail; npm install' ]
 
 # Install deps for your pxt-maker fork (repo root)
+# - Install libudev headers so native 'usb' can compile if it still appears.
+# - Also pass --no-optional to skip optional native deps we don’t need for static site.
+# - Silence Browserslist “outdated” warnings to reduce noise.
 - name: 'node:18'
   entrypoint: 'bash'
-  args: ['-lc', 'set -euo pipefail; npm install' ]
+  args:
+    - -lc
+    - |
+      set -euo pipefail
+      export BROWSERSLIST_IGNORE_OLD_DATA=1
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential python3 pkg-config libudev-dev
+      rm -rf /var/lib/apt/lists/*
+      npm install --no-optional
 
 # Link local pxt + common packages into this target (via npx)
 - name: 'node:18'
@@ -59,6 +71,7 @@ steps:
     - -lc
     - |
       set -euo pipefail
+      export BROWSERSLIST_IGNORE_OLD_DATA=1
       npx pxt staticpkg --githubpages --output ./site
       cat > firebase.json <<'JSON'
       { "hosting": { "public": "site", "ignore": ["firebase.json", "**/.*", "**/node_modules/**"] } }
