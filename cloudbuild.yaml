@@ -1,20 +1,21 @@
-# cloudbuild.yaml  — build MakeCode (pxt-maker) and deploy to Firebase Hosting
+# cloudbuild.yaml — builds pxt-maker and deploys to Firebase Hosting (no local CLI needed)
 
 options:
   logging: CLOUD_LOGGING_ONLY
 
 substitutions:
   _FIREBASE_PROJECT: springbot-co-za
-  _GITHUB_ORG: gotfredsen
+  _FIREBASE_SITE: springbot          # your desired site id (will be created if missing)
+  _GITHUB_ORG: domino4com      # forks live here
 
 steps:
-# Clone PXT core + common packages (the source pxt-maker repo is already in /workspace)
+# Clone PXT core + common packages (pxt-maker source is the repo this file lives in)
 - name: 'gcr.io/cloud-builders/git'
   args: ['clone', 'https://github.com/${_GITHUB_ORG}/pxt', 'pxt']
 - name: 'gcr.io/cloud-builders/git'
   args: ['clone', 'https://github.com/${_GITHUB_ORG}/pxt-common-packages', 'pxt-common-packages']
 
-# Build & package site
+# Build & package static site to ./site
 - name: 'gcr.io/cloud-builders/npm'
   entrypoint: 'bash'
   args:
@@ -26,17 +27,12 @@ steps:
       (cd pxt-common-packages && npm ci)
       (cd pxt-maker && npm ci && pxt link ../pxt && pxt link ../pxt-common-packages)
       (cd pxt-maker && pxt staticpkg --githubpages --output ../site)
-      # minimal firebase.json at repo root pointing to ./site
+      # minimal firebase.json telling Hosting to serve ./site
       cat > firebase.json <<'JSON'
-      {
-        "hosting": {
-          "public": "site",
-          "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
-        }
-      }
+      { "hosting": { "public": "site", "ignore": ["firebase.json", "**/.*", "**/node_modules/**"] } }
       JSON
 
-# Deploy to Firebase Hosting using token from Secret Manager
+# Ensure Hosting site exists (create if missing), then deploy
 - name: 'node:18'
   entrypoint: 'bash'
   secretEnv: ['FIREBASE_TOKEN']
@@ -44,7 +40,11 @@ steps:
     - -lc
     - |
       set -euo pipefail
-      npx firebase-tools deploy --non-interactive --only hosting --project ${_FIREBASE_PROJECT}
+      npx firebase-tools hosting:sites:create "${_FIREBASE_SITE}" --project "${_FIREBASE_PROJECT}" || true
+      npx firebase-tools deploy --non-interactive \
+        --only hosting \
+        --project "${_FIREBASE_PROJECT}" \
+        --site "${_FIREBASE_SITE}"
 
 availableSecrets:
   secretManager:
