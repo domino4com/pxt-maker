@@ -1,29 +1,45 @@
 #!/usr/bin/env bash
 set -euxo pipefail
 
-# Only keep ESP32/ESP32-S2 relevant libs and your Springbot board
+# Toggle connectivity libs quickly from Cloud Build:
+#   ENABLE_CONNECTIVITY=1  -> KEEP azureiot/mqtt/net
+#   ENABLE_CONNECTIVITY=0  -> DROP them (default)
+ENABLE_CONNECTIVITY="${ENABLE_CONNECTIVITY:-0}"
+
+# 1) Remove MCU variants we don't need (RP2040/SAMD/STM32/NRF)
 pushd pxt-common-packages/libs
+find . -maxdepth 1 -type d \( -name '*---rp2040' -o -name '*---samd' -o -name '*---stm32' -o -name '*---nrf52' \) -print0 | xargs -0 rm -rf || true
+rm -rf core---rp2040 core---samd mixer---samd mixer---stm32 mixer---nrf52 || true
 
-# Remove MCU-specific libs we don't need
-# (rp2040 / samd / stm32 / nrf52 variants and their mixers/cores)
-rm -rf core---rp2040 core---samd mixer---samd mixer---stm32 mixer---nrf52 \
-       screen---st7735 2>/dev/null || true
-
-# If you don’t use these in your first release, drop them to avoid crypto/settings errors + cache build:
-rm -rf azureiot mqtt radio radio-broadcast lora net net-game 2>/dev/null || true
-
-# Keep generics + ESP32 bits; delete other MCU variants of any package if present
-find . -maxdepth 1 -type d -name '*---rp2040' -o -name '*---samd' -o -name '*---stm32' -o -name '*---nrf52' \
-  -print0 | xargs -0 rm -rf || true
-
+# 2) Connectivity libs (soft toggle)
+if [ "${ENABLE_CONNECTIVITY}" != "1" ]; then
+  rm -rf azureiot mqtt net net-game radio radio-broadcast lora || true
+else
+  # keep azureiot/mqtt/net; still drop radios we don't use
+  rm -rf radio radio-broadcast lora || true
+fi
 popd
 
-# Remove Node typings so the TS compiler won’t parse them
+# 3) Keep only v1 allow-list packages from your target if you’ve vendored any libs there.
+# (No-op if you only reference libs from pxt-common-packages.)
+# Example (uncomment & adjust if you ever copy libs into your target repo):
+# pushd pxt-maker/libs
+# for d in *; do
+#   case "$d" in
+#     buttons|touch|ledmatrix|neopixel|serial|i2c|spi|storage|music|sensors) ;; # keep
+#     *) rm -rf "$d" ;;
+#   esac
+# done
+# popd
+
+# 4) Prevent Node typings from polluting TS build
 rm -rf node_modules/@types/node || true
-
-# Optional: if @types/node sneaks in under pxt-common-packages, drop it there too
 rm -rf pxt-common-packages/node_modules/@types/node || true
+rm -rf pxt/node_modules/@types/node || true
 
-# Sanity: show what remains for visibility
-echo "Remaining libs:"
-ls -1 pxt-common-packages/libs
+# 5) (Safety) Remove settings overrides that referenced DAL.* in non-ESP targets
+# Only if they exist in your checkout; harmless otherwise.
+find pxt-common-packages -path '*/settings/targetoverrides.ts' -print0 | xargs -0 rm -f || true
+
+echo "Prune complete. Remaining top-level libs:"
+ls -1 pxt-common-packages/libs || true
