@@ -1,4 +1,8 @@
 # cloudbuild.yaml — build pxt-maker (repo root) and deploy to Firebase Hosting
+# Values you gave:
+# _FIREBASE_PROJECT: springbot-co-za
+# _FIREBASE_SITE: springbot
+# _GITHUB_ORG: domino4com
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -16,46 +20,47 @@ steps:
 - name: 'gcr.io/cloud-builders/git'
   args: ['clone', 'https://github.com/${_GITHUB_ORG}/pxt-common-packages', 'pxt-common-packages']
 
-# Install global tools once
-- name: 'gcr.io/cloud-builders/npm'
-  args: ['install', '-g', 'pxt', 'gulp', 'npx']
-
+# Use Node 18 for all npm/pxt work; NO global installs
 # Build PXT core
-- name: 'gcr.io/cloud-builders/npm'
+- name: 'node:18'
   dir: 'pxt'
-  args: ['ci']
-
-- name: 'gcr.io/cloud-builders/npm'
-  dir: 'pxt'
-  args: ['run', 'build']
+  entrypoint: 'bash'
+  args:
+    - -lc
+    - |
+      set -euo pipefail
+      npm ci
+      npm run build
 
 # Install common packages
-- name: 'gcr.io/cloud-builders/npm'
+- name: 'node:18'
   dir: 'pxt-common-packages'
-  args: ['ci']
+  entrypoint: 'bash'
+  args: ['-lc', 'set -euo pipefail; npm ci' ]
 
-# Install dependencies for your pxt-maker fork (repo root)
-- name: 'gcr.io/cloud-builders/npm'
-  args: ['ci']
+# Install deps for your pxt-maker fork (repo root)
+- name: 'node:18'
+  entrypoint: 'bash'
+  args: ['-lc', 'set -euo pipefail; npm ci' ]
 
-# Link local pxt + common packages into this target
-- name: 'gcr.io/cloud-builders/npm'
+# Link local pxt + common packages into this target (via npx)
+- name: 'node:18'
   entrypoint: 'bash'
   args:
     - -lc
     - |
       set -euo pipefail
-      pxt link ./pxt
-      pxt link ./pxt-common-packages
+      npx pxt link ./pxt
+      npx pxt link ./pxt-common-packages
 
-# Build static package to ./site
-- name: 'gcr.io/cloud-builders/npm'
+# Build static package to ./site (via npx). Also write minimal firebase.json
+- name: 'node:18'
   entrypoint: 'bash'
   args:
     - -lc
     - |
       set -euo pipefail
-      pxt staticpkg --githubpages --output ./site
+      npx pxt staticpkg --githubpages --output ./site
       cat > firebase.json <<'JSON'
       { "hosting": { "public": "site", "ignore": ["firebase.json", "**/.*", "**/node_modules/**"] } }
       JSON
