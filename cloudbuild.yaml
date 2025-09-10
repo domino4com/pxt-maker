@@ -1,38 +1,66 @@
-# cloudbuild.yaml — builds pxt-maker and deploys to Firebase Hosting (no local CLI needed)
+# cloudbuild.yaml — build pxt-maker (repo root) and deploy to Firebase Hosting
 
 options:
   logging: CLOUD_LOGGING_ONLY
 
 substitutions:
   _FIREBASE_PROJECT: springbot-co-za
-  _FIREBASE_SITE: springbot          # your desired site id (will be created if missing)
-  _GITHUB_ORG: domino4com      # forks live here
+  _FIREBASE_SITE: springbot
+  _GITHUB_ORG: domino4com
 
 steps:
-# Clone PXT core + common packages (pxt-maker source is the repo this file lives in)
+# Clone PXT core + common packages into /workspace
 - name: 'gcr.io/cloud-builders/git'
   args: ['clone', 'https://github.com/${_GITHUB_ORG}/pxt', 'pxt']
+
 - name: 'gcr.io/cloud-builders/git'
   args: ['clone', 'https://github.com/${_GITHUB_ORG}/pxt-common-packages', 'pxt-common-packages']
 
-# Build & package static site to ./site
+# Install global tools once
+- name: 'gcr.io/cloud-builders/npm'
+  args: ['install', '-g', 'pxt', 'gulp', 'npx']
+
+# Build PXT core
+- name: 'gcr.io/cloud-builders/npm'
+  dir: 'pxt'
+  args: ['ci']
+
+- name: 'gcr.io/cloud-builders/npm'
+  dir: 'pxt'
+  args: ['run', 'build']
+
+# Install common packages
+- name: 'gcr.io/cloud-builders/npm'
+  dir: 'pxt-common-packages'
+  args: ['ci']
+
+# Install dependencies for your pxt-maker fork (repo root)
+- name: 'gcr.io/cloud-builders/npm'
+  args: ['ci']
+
+# Link local pxt + common packages into this target
 - name: 'gcr.io/cloud-builders/npm'
   entrypoint: 'bash'
   args:
     - -lc
     - |
       set -euo pipefail
-      npm i -g pxt gulp npx
-      (cd pxt && npm ci && npm run build)
-      (cd pxt-common-packages && npm ci)
-      (cd pxt-maker && npm ci && pxt link ../pxt && pxt link ../pxt-common-packages)
-      (cd pxt-maker && pxt staticpkg --githubpages --output ../site)
-      # minimal firebase.json telling Hosting to serve ./site
+      pxt link ./pxt
+      pxt link ./pxt-common-packages
+
+# Build static package to ./site
+- name: 'gcr.io/cloud-builders/npm'
+  entrypoint: 'bash'
+  args:
+    - -lc
+    - |
+      set -euo pipefail
+      pxt staticpkg --githubpages --output ./site
       cat > firebase.json <<'JSON'
       { "hosting": { "public": "site", "ignore": ["firebase.json", "**/.*", "**/node_modules/**"] } }
       JSON
 
-# Ensure Hosting site exists (create if missing), then deploy
+# Ensure Hosting site exists; then deploy using FIREBASE_TOKEN from Secret Manager
 - name: 'node:18'
   entrypoint: 'bash'
   secretEnv: ['FIREBASE_TOKEN']
