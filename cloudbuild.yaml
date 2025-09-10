@@ -1,0 +1,52 @@
+# cloudbuild.yaml  — build MakeCode (pxt-maker) and deploy to Firebase Hosting
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _FIREBASE_PROJECT: springbot-co-za
+  _GITHUB_ORG: gotfredsen
+
+steps:
+# Clone PXT core + common packages (the source pxt-maker repo is already in /workspace)
+- name: 'gcr.io/cloud-builders/git'
+  args: ['clone', 'https://github.com/${_GITHUB_ORG}/pxt', 'pxt']
+- name: 'gcr.io/cloud-builders/git'
+  args: ['clone', 'https://github.com/${_GITHUB_ORG}/pxt-common-packages', 'pxt-common-packages']
+
+# Build & package site
+- name: 'gcr.io/cloud-builders/npm'
+  entrypoint: 'bash'
+  args:
+    - -lc
+    - |
+      set -euo pipefail
+      npm i -g pxt gulp npx
+      (cd pxt && npm ci && npm run build)
+      (cd pxt-common-packages && npm ci)
+      (cd pxt-maker && npm ci && pxt link ../pxt && pxt link ../pxt-common-packages)
+      (cd pxt-maker && pxt staticpkg --githubpages --output ../site)
+      # minimal firebase.json at repo root pointing to ./site
+      cat > firebase.json <<'JSON'
+      {
+        "hosting": {
+          "public": "site",
+          "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
+        }
+      }
+      JSON
+
+# Deploy to Firebase Hosting using token from Secret Manager
+- name: 'node:18'
+  entrypoint: 'bash'
+  secretEnv: ['FIREBASE_TOKEN']
+  args:
+    - -lc
+    - |
+      set -euo pipefail
+      npx firebase-tools deploy --non-interactive --only hosting --project ${_FIREBASE_PROJECT}
+
+availableSecrets:
+  secretManager:
+  - versionName: projects/$PROJECT_ID/secrets/FIREBASE_TOKEN/versions/latest
+    env: 'FIREBASE_TOKEN'
