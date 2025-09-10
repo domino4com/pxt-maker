@@ -1,10 +1,4 @@
-# cloudbuild.yaml — Springbot (ESP32-S2) MakeCode editor build + deploy (Firebase Hosting)
-
-timeout: "120m"
-
-options:
-  logging: CLOUD_LOGGING_ONLY
-  machineType: E2_HIGHCPU_8
+# cloudbuild.yaml for building PXT Maker (ESP32-S2 only)
 
 substitutions:
   _FIREBASE_PROJECT: springbot-co-za
@@ -12,171 +6,83 @@ substitutions:
   _GITHUB_ORG: domino4com
 
 steps:
-  # 0) Clone PXT core and common packages (Microsoft upstream)
+  # Step 0: Clone pxt
   - name: gcr.io/cloud-builders/git
-    id: Clone pxt
-    args: ["clone", "--depth=1", "https://github.com/microsoft/pxt.git", "pxt"]
+    args: ["clone", "https://github.com/microsoft/pxt", "pxt"]
 
+  # Step 1: Clone pxt-common-packages
   - name: gcr.io/cloud-builders/git
-    id: Clone pxt-common-packages
-    args: ["clone", "--depth=1", "https://github.com/microsoft/pxt-common-packages.git", "pxt-common-packages"]
+    args: ["clone", "https://github.com/microsoft/pxt-common-packages", "pxt-common-packages"]
 
-  # 1) Build PXT core
+  # Step 2: Build pxt core
   - name: node:18
-    id: Build pxt core
     entrypoint: bash
     args:
-      - -lc
+      - -c
       - |
-        set -euo pipefail
-        export BROWSERSLIST_IGNORE_OLD_DATA=1
-        cd pxt
-        npm install
-        npm run build
+        npm install -g gulp npx
+        (cd pxt && npm ci && npm run build)
 
-  # 2) Install pxt-common-packages
+  # Step 3: Install pxt-common-packages
   - name: node:18
-    id: Install pxt-common-packages
     entrypoint: bash
     args:
-      - -lc
+      - -c
       - |
-        set -euo pipefail
-        export BROWSERSLIST_IGNORE_OLD_DATA=1
-        cd pxt-common-packages
-        npm install --omit=dev
+        (cd pxt-common-packages && npm ci)
 
-  # 3) Install target deps (repo root) + system deps for native module builds
+  # Step 4: Install target deps (pxt-maker)
   - name: node:18
-    id: Install target deps (pxt-maker)
     entrypoint: bash
     args:
-      - -lc
+      - -c
       - |
-        set -euo pipefail
-        export BROWSERSLIST_IGNORE_OLD_DATA=1
-        apt-get update
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-          build-essential python3 pkg-config libudev-dev
-        rm -rf /var/lib/apt/lists/*
-        npm install --no-optional
+        apt-get update && apt-get install -y python3 pkg-config build-essential libudev-dev
+        (cd pxt-maker && npm ci)
 
-  # 4) Ensure prune script exists and is executable (self-healing)
+  # Step 5: Prune non-ESP MCUs & connectivity libs
   - name: node:18
-    id: Ensure prune script
     entrypoint: bash
     args:
-      - -lc
+      - -c
       - |
-        set -euo pipefail
-        mkdir -p scripts
-        if [ ! -s scripts/prune-for-esp32s2.sh ]; then
-          cat > scripts/prune-for-esp32s2.sh <<'BASH'
-#!/usr/bin/env bash
-set -euxo pipefail
-
-
-pushd pxt-common-packages/libs
-find . -maxdepth 1 -type d \( -name '*---rp2040' -o -name '*---samd' -o -name '*---stm32' -o -name '*---nrf52' \) -print0 | xargs -0 rm -rf || true
-rm -rf core---rp2040 core---samd mixer---samd mixer---stm32 mixer---nrf52 || true
-
-
-rm -rf azureiot mqtt net net-game radio radio-broadcast lora || true
-popd
-
-
-rm -rf node_modules/@types/node || true
-rm -rf pxt-common-packages/node_modules/@types/node || true
-rm -rf pxt/node_modules/@types/node || true
-
-
-find pxt-common-packages -path '*/settings/targetoverrides.ts' -print0 | xargs -0 rm -f || true
-
-echo "Prune complete. Remaining libs:"
-ls -1 pxt-common-packages/libs || true
-BASH
-        fi
         chmod +x scripts/prune-for-esp32s2.sh
-
-  # 5) Prune non-ESP MCUs & connectivity libs
-  - name: node:18
-    id: Prune non-ESP MCUs & connectivity libs
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euo pipefail
         ./scripts/prune-for-esp32s2.sh
 
-  # 6) Link local pxt repos into the target
+  # Step 6: Build static site for ESP32-S2
   - name: node:18
-    id: Link local pxt repos
     entrypoint: bash
     args:
-      - -lc
+      - -c
       - |
-        set -euo pipefail
-        rm -rf node_modules/pxt-core node_modules/pxt_common_packages node_modules/pxt-common-packages || true
-        npx pxt link ./pxt
-        npx pxt link ./pxt-common-packages
+        (cd pxt-maker && pxt link ../pxt && pxt link ../pxt-common-packages)
+        (cd pxt-maker && pxt staticpkg --githubpages --output ../site)
 
-  # 7) Build static package → ./site
-  - name: node:18
-    id: Build static site (Springbot)
+  # Step 7: Create firebase.json for hosting
+  - name: bash
     entrypoint: bash
     args:
-      - -lc
+      - -c
       - |
-        set -euo pipefail
-        export BROWSERSLIST_IGNORE_OLD_DATA=1
-        export PXT_FORCE=1
-        export PXT_NO_UPDATE=1
-        npx pxt staticpkg --githubpages --output ./site
-
-  # 8) Write minimal firebase.json to serve ./site
-  - name: 'node:18'
-    id: Write firebase.json
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euo pipefail
         cat > firebase.json <<'JSON'
         {
           "hosting": {
-            "site": "${_FIREBASE_SITE}",
             "public": "site",
-            "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-            "headers": [
-              { "source": "**/*.wasm", "headers": [{ "key": "Cross-Origin-Opener-Policy", "value": "same-origin" }] },
-              { "source": "**/*.wasm", "headers": [{ "key": "Cross-Origin-Embedder-Policy", "value": "require-corp" }] }
+            "ignore": [
+              "firebase.json",
+              "**/.*",
+              "**/node_modules/**"
             ]
           }
         }
         JSON
 
-  # 9) Deploy to Firebase Hosting (requires FIREBASE_TOKEN in Secret Manager)
-  - name: 'node:18'
-    id: Deploy to Firebase Hosting
+  # Step 8: Deploy to Firebase Hosting
+  - name: gcr.io/firebase-extensions/firebase-cli
     entrypoint: bash
-    secretEnv: ['FIREBASE_TOKEN']
     args:
-      - -lc
+      - -c
       - |
-        set -euo pipefail
-        npx firebase-tools hosting:sites:create "${_FIREBASE_SITE}" --project "${_FIREBASE_PROJECT}" || true
-        npx firebase-tools deploy --non-interactive \
-          --only hosting \
-          --project "${_FIREBASE_PROJECT}" \
-          --site "${_FIREBASE_SITE}"
+        firebase deploy --only hosting --project=${_FIREBASE_PROJECT} --site=${_FIREBASE_SITE}
 
-availableSecrets:
-  secretManager:
-    - versionName: projects/$PROJECT_ID/secrets/FIREBASE_TOKEN/versions/latest
-      env: 'FIREBASE_TOKEN'
-
-tags:
-  - springbot
-  - esp32s2
-  - pxt
-  - makecode
+timeout: "3600s"
