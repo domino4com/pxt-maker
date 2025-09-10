@@ -12,7 +12,7 @@ substitutions:
   _GITHUB_ORG: domino4com
 
 steps:
-  # 0) Clone PXT core and common packages (from Microsoft upstream)
+  # 0) Clone PXT core and common packages (Microsoft upstream)
   - name: gcr.io/cloud-builders/git
     id: Clone pxt
     args: ["clone", "--depth=1", "https://github.com/microsoft/pxt.git", "pxt"]
@@ -46,7 +46,7 @@ steps:
         cd pxt-common-packages
         npm install --omit=dev
 
-  # 3) Install target (repo root) + system deps for optional native modules
+  # 3) Install target deps (repo root) + system deps for any native module builds
   - name: node:18
     id: Install target deps (pxt-maker)
     entrypoint: bash
@@ -59,56 +59,23 @@ steps:
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
           build-essential python3 pkg-config libudev-dev
         rm -rf /var/lib/apt/lists/*
-        # Install without optional native deps to speed up build
         npm install --no-optional
 
-  # 4) Prune to ESP32-S2 only (allow-list); keep connectivity OFF for v1
+  # 4) Prune to ESP32-S2 only and drop AzureIoT/MQTT/Net for now
   - name: node:18
-    id: Prune non-ESP MCUs & noisy libs
+    id: Prune non-ESP MCUs & connectivity libs
     entrypoint: bash
-    env:
-      - ENABLE_CONNECTIVITY=0     # set to 1 later if you want azureiot/mqtt/net kept
     args:
       - -lc
       - |
         set -euo pipefail
-        mkdir -p scripts
-        # Create the prune script (if not committed yet)
-        cat > scripts/prune-for-esp32s2.sh <<'BASH'
-        #!/usr/bin/env bash
-        set -euxo pipefail
-
-        # Ensure env var provided
-        test -n "$ENABLE_CONNECTIVITY" || { echo "ERROR: ENABLE_CONNECTIVITY missing"; exit 1; }
-
-        # 1) Drop other MCU variants (rp2040/samd/stm32/nrf52)
-        pushd pxt-common-packages/libs
-        find . -maxdepth 1 -type d \( -name '*---rp2040' -o -name '*---samd' -o -name '*---stm32' -o -name '*---nrf52' \) -print0 | xargs -0 rm -rf || true
-        rm -rf core---rp2040 core---samd mixer---samd mixer---stm32 mixer---nrf52 || true
-
-        # 2) Connectivity toggle
-        if [ "$ENABLE_CONNECTIVITY" != "1" ]; then
-          rm -rf azureiot mqtt net net-game radio radio-broadcast lora || true
+        if [ -x scripts/prune-for-esp32s2.sh ]; then
+          ./scripts/prune-for-esp32s2.sh
         else
-          rm -rf radio radio-broadcast lora || true
+          echo "scripts/prune-for-esp32s2.sh missing or not executable"; exit 1
         fi
-        popd
 
-        # 3) Keep TS clean of Node typings
-        rm -rf node_modules/@types/node || true
-        rm -rf pxt-common-packages/node_modules/@types/node || true
-        rm -rf pxt/node_modules/@types/node || true
-
-        # 4) Remove settings overrides that reference non-ESP DAL constants
-        find pxt-common-packages -path '*/settings/targetoverrides.ts' -print0 | xargs -0 rm -f || true
-
-        echo "Prune complete. Remaining libs:"
-        ls -1 pxt-common-packages/libs || true
-        BASH
-        chmod +x scripts/prune-for-esp32s2.sh
-        ./scripts/prune-for-esp32s2.sh
-
-  # 5) Pre-clean and link local pxt + pxt-common-packages into target
+  # 5) Link local pxt repos into the target
   - name: node:18
     id: Link local pxt repos
     entrypoint: bash
