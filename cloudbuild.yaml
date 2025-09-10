@@ -1,8 +1,8 @@
 # cloudbuild.yaml — build pxt-maker (repo root) and deploy to Firebase Hosting
-# Values you gave:
-# _FIREBASE_PROJECT: springbot-co-za
-# _FIREBASE_SITE: springbot
-# _GITHUB_ORG: domino4com
+# Project values:
+#   _FIREBASE_PROJECT: springbot-co-za
+#   _FIREBASE_SITE: springbot
+#   _GITHUB_ORG: domino4com
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -20,8 +20,7 @@ steps:
 - name: 'gcr.io/cloud-builders/git'
   args: ['clone', 'https://github.com/${_GITHUB_ORG}/pxt-common-packages', 'pxt-common-packages']
 
-# Use Node 18 for all npm/pxt work; NO global installs
-# Build PXT core
+# Build PXT core (use npm install instead of npm ci)
 - name: 'node:18'
   dir: 'pxt'
   entrypoint: 'bash'
@@ -29,19 +28,19 @@ steps:
     - -lc
     - |
       set -euo pipefail
-      npm ci
+      npm install
       npm run build
 
 # Install common packages
 - name: 'node:18'
   dir: 'pxt-common-packages'
   entrypoint: 'bash'
-  args: ['-lc', 'set -euo pipefail; npm ci' ]
+  args: ['-lc', 'set -euo pipefail; npm install' ]
 
 # Install deps for your pxt-maker fork (repo root)
 - name: 'node:18'
   entrypoint: 'bash'
-  args: ['-lc', 'set -euo pipefail; npm ci' ]
+  args: ['-lc', 'set -euo pipefail; npm install' ]
 
 # Link local pxt + common packages into this target (via npx)
 - name: 'node:18'
