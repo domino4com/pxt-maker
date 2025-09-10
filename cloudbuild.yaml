@@ -1,144 +1,48 @@
-# cloudbuild.yaml
-# Vars:
-#   _FIREBASE_PROJECT: springbot-co-za
-#   _FIREBASE_SITE: springbot
-#   _GITHUB_ORG: domino4com
+# ... your existing steps up to "Install deps (pxt-maker) + link" ...
 
-timeout: "120m"
-
-options:
-  logging: CLOUD_LOGGING_ONLY
-  machineType: E2_HIGHCPU_8
-
-steps:
-  # 0) Clone pxt + pxt-common-packages
-  - name: gcr.io/cloud-builders/git
-    id: Clone pxt
-    args: ["clone", "--depth=1", "https://github.com/microsoft/pxt.git", "pxt"]
-
-  - name: gcr.io/cloud-builders/git
-    id: Clone common packages
-    args: ["clone", "--depth=1", "https://github.com/microsoft/pxt-common-packages.git", "pxt-common-packages"]
-
-  # 1) Install Node deps for pxt (uses Node 18)
-  - name: node:18
-    id: Install deps (pxt)
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -eux
-        cd pxt
-        npm install
-        npm run build
-
-  # 2) Install Node deps for pxt-common-packages (no dev to avoid @types/node bleed)
-  - name: node:18
-    id: Install deps (common-packages)
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -eux
-        cd pxt-common-packages
-        npm install --omit=dev
-
-  # 3) Bring in your pxt-maker (Springbot target) from your GitHub org
-  - name: gcr.io/cloud-builders/git
-    id: Clone target (pxt-maker)
-    args: ["clone", "--depth=1", "https://github.com/${_GITHUB_ORG}/pxt-maker.git", "pxt-maker"]
-
-  # 4) Install target deps and link pxt + common packages locally
-  - name: node:18
-    id: Install deps (pxt-maker) + link
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -eux
-        cd pxt-maker
-        npm install
-        npx pxt link ../pxt
-        npx pxt link ../pxt-common-packages
-
-  # 5) (NEW) Prune non-ESP32 content and node typings
-  - name: node:18
-    id: Prune to ESP32-S2 only
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -eux
-        mkdir -p scripts
+# Prune to ESP32-S2 + allow-list; keep connectivity OFF for now
+- name: 'node:18'
+  id: Prune to ESP32-S2 only
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -eux
+      # ensure script exists (if not checked in yet, write it)
+      mkdir -p scripts
+      if [ ! -f scripts/prune-for-esp32s2.sh ]; then
         cat > scripts/prune-for-esp32s2.sh <<'BASH'
         #!/usr/bin/env bash
         set -euxo pipefail
+        ENABLE_CONNECTIVITY="${ENABLE_CONNECTIVITY:-0}"
         pushd pxt-common-packages/libs
-        rm -rf core---rp2040 core---samd mixer---samd mixer---stm32 mixer---nrf52 screen---st7735 || true
-        rm -rf azureiot mqtt radio radio-broadcast lora net net-game || true
         find . -maxdepth 1 -type d \( -name '*---rp2040' -o -name '*---samd' -o -name '*---stm32' -o -name '*---nrf52' \) -print0 | xargs -0 rm -rf || true
+        rm -rf core---rp2040 core---samd mixer---samd mixer---stm32 mixer---nrf52 || true
+        if [ "${ENABLE_CONNECTIVITY}" != "1" ]; then
+          rm -rf azureiot mqtt net net-game radio radio-broadcast lora || true
+        else
+          rm -rf radio radio-broadcast lora || true
+        fi
         popd
         rm -rf node_modules/@types/node || true
         rm -rf pxt-common-packages/node_modules/@types/node || true
-        echo "Remaining libs:"; ls -1 pxt-common-packages/libs
+        rm -rf pxt/node_modules/@types/node || true
+        find pxt-common-packages -path '*/settings/targetoverrides.ts' -print0 | xargs -0 rm -f || true
         BASH
         chmod +x scripts/prune-for-esp32s2.sh
-        ./scripts/prune-for-esp32s2.sh
+      fi
+      # RUN with connectivity OFF (fast/clean v1)
+      ENABLE_CONNECTIVITY=0 ./scripts/prune-for-esp32s2.sh
 
-  # 6) Build the editor static package for the Springbot board only
-  - name: node:18
-    id: Build static site (Springbot)
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -eux
-        cd pxt-maker
-        # Ensure we only package the current target; avoid global hex cache
-        # Also ensure no node types bleed into the compile
-        export PXT_FORCE=1
-        export PXT_NO_UPDATE=1
-        npx pxt staticpkg --githubpages --output ../site
-
-  # 7) Prepare Firebase Hosting config (serve ./site)
-  - name: gcr.io/cloud-builders/gcloud
-    id: Write firebase.json
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -eux
-        cat > firebase.json <<'JSON'
-        {
-          "hosting": {
-            "site": "${_FIREBASE_SITE}",
-            "public": "site",
-            "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-            "headers": [
-              { "source": "**/*.wasm", "headers": [{ "key": "Cross-Origin-Opener-Policy", "value": "same-origin" }] },
-              { "source": "**/*.wasm", "headers": [{ "key": "Cross-Origin-Embedder-Policy", "value": "require-corp" }] }
-            ]
-          }
-        }
-        JSON
-
-  # 8) Deploy to Firebase Hosting (site=_FIREBASE_SITE)
-  - name: gcr.io/cloud-builders/gcloud
-    id: Firebase deploy
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -eux
-        gcloud firebase hosting:sites:update "${_FIREBASE_SITE}" --project="${_FIREBASE_PROJECT}" || true
-        gcloud firebase hosting:channels:deploy live \
-          --project="${_FIREBASE_PROJECT}" \
-          --site="${_FIREBASE_SITE}" \
-          --only hosting
-
-substitutions:
-  _FIREBASE_PROJECT: springbot-co-za
-  _FIREBASE_SITE: springbot
-  _GITHUB_ORG: domino4com
-
-tags: ["springbot", "esp32s2", "pxt", "makecode"]
+# Build static site for Springbot target only
+- name: 'node:18'
+  id: Build static site (Springbot)
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -eux
+      cd pxt-maker
+      export PXT_FORCE=1
+      export PXT_NO_UPDATE=1
+      npx pxt staticpkg --githubpages --output ../site
