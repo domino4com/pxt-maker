@@ -1,128 +1,117 @@
-# Cloud Build for Springbot MakeCode (ESP32-S2 only)
-# Substitutions expected on the trigger:
-#   _FIREBASE_PROJECT : springbot-co-za
-#   _FIREBASE_SITE    : springbot
-#   _GITHUB_ORG       : domino4com
+# cloudbuild.yaml — springbot / ESP32-S2 focused
 
-timeout: "120m"
-
-steps:
-# 0) Clone pxt (core)
-- name: gcr.io/cloud-builders/git
-  id: Clone pxt
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      git clone https://github.com/$_GITHUB_ORG/pxt.git
-
-# 1) Clone pxt-common-packages (shared libs)
-- name: gcr.io/cloud-builders/git
-  id: Clone pxt-common-packages
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      git clone https://github.com/$_GITHUB_ORG/pxt-common-packages.git
-
-# 2) Build pxt core (NO global npm/npx; NO npm ci without lockfile)
-- name: node:18
-  id: Build pxt core
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      node -v
-      npm -v
-      cd pxt
-      if [ -f package-lock.json ]; then npm ci; else npm install; fi
-      # pxt-core defines "build": "gulp"
-      npm run build
-
-# 3) Install pxt-common-packages deps (no ci unless lockfile present)
-- name: node:18
-  id: Install pxt-common-packages
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      cd pxt-common-packages
-      if [ -f package-lock.json ]; then npm ci; else npm install; fi
-
-# 4) Install target deps (pxt-maker)
-- name: node:18
-  id: Install target deps (pxt-maker)
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      # Repo being built is already in /workspace
-      # Ensure local tooling needed by target (includes webusb helpers)
-      if [ -f package-lock.json ]; then npm ci; else npm install; fi
-
-# 5) Prune to ESP32-S2 only (and drop azureiot/mqtt/net for now)
-- name: node:18
-  id: Prune non-ESP MCUs & connectivity libs
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      if [ -f scripts/prune-for-esp32s2.sh ]; then
-        chmod +x scripts/prune-for-esp32s2.sh
-        scripts/prune-for-esp32s2.sh
-      else
-        echo "WARN: scripts/prune-for-esp32s2.sh not found; skipping prune"
-      fi
-
-# 6) Link pxt + common-packages into target and build static package
-- name: node:18
-  id: Build site
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      # Local install of pxt CLI in the workspace (no global install)
-      # (node:18 already has npx, so we can run npx pxt ...)
-      # First, make sure pxt-maker has its deps
-      if [ -f package-lock.json ]; then npm ci; else npm install; fi
-
-      # Link target to locally-cloned pxt repos
-      npx pxt link ./pxt
-      npx pxt link ./pxt-common-packages
-
-      # Build static site
-      npx pxt staticpkg --githubpages --output ./site
-
-      # Minimal firebase.json for Hosting (serve ./site)
-      cat > firebase.json <<'JSON'
-      {
-        "hosting": {
-          "public": "site",
-          "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
-        }
-      }
-      JSON
-
-# 7) Deploy to Firebase Hosting (Hosting REST via CLI — no local login)
-- name: gcr.io/firebase-tools/cli
-  id: Deploy to Firebase Hosting
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      # Use the service account that the Cloud Build trigger runs as;
-      # the official firebase-tools image respects ADC automatically.
-      # Note: SITE is optional if you only have one site on the project.
-      firebase --project "$_FIREBASE_PROJECT" deploy --only hosting:"$_FIREBASE_SITE"
-
-# Option A: Cloud Logging only (no GCS logs bucket required)
 options:
   logging: CLOUD_LOGGING_ONLY
+
+# No substitutions required beyond your existing Firebase ones, so none declared here.
+
+steps:
+  # 0) Clone pxt (core)
+  - name: gcr.io/cloud-builders/git
+    id: Clone pxt
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euxo pipefail
+        git clone https://github.com/domino4com/pxt.git
+
+  # 1) Clone pxt-common-packages
+  - name: gcr.io/cloud-builders/git
+    id: Clone pxt-common-packages
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euxo pipefail
+        git clone https://github.com/domino4com/pxt-common-packages.git
+
+  # 2) Build pxt core (gulp etc.)
+  - name: node:18
+    id: Build pxt core
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euxo pipefail
+        node -v
+        npm -v
+        cd pxt
+        # Fresh install (not npm ci) to avoid lockfile/version drift
+        rm -f package-lock.json || true
+        npm install
+        npm run build
+
+  # 3) Install deps for pxt-common-packages
+  - name: node:18
+    id: Install pxt-common-packages
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euxo pipefail
+        cd pxt-common-packages
+        rm -f package-lock.json || true
+        npm install
+
+  # 4) Install deps for the target repo (this repo is the Cloud Build source)
+  - name: node:18
+    id: Install target deps (pxt-maker)
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euxo pipefail
+        # We're at /workspace (root of your pxt-maker repo)
+        node -v
+        npm -v
+        rm -f package-lock.json || true
+        npm install
+
+  # 5) Prune non-ESP MCUs & connectivity libs (your script)
+  - name: node:18
+    id: Prune for ESP32-S2 (springbot)
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euxo pipefail
+        # Ensure script exists, make it executable, then run it
+        test -f scripts/prune-for-esp32s2.sh
+        chmod +x scripts/prune-for-esp32s2.sh
+        ./scripts/prune-for-esp32s2.sh
+
+  # 6) Link local pxt + pxt-common-packages and build the target site
+  - name: node:18
+    id: Link & build target
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euxo pipefail
+        # Stay in repo root (/workspace)
+        # Reinstall after pruning in case files changed
+        rm -f package-lock.json || true
+        npm install
+
+        # Show pxt version (sanity check)
+        npx pxt --version
+
+        # Link to local clones
+        npx pxt link ./pxt
+        npx pxt link ./pxt-common-packages
+
+        # Clean, then produce a static site bundle
+        npx pxt clean
+        npx pxt staticpkg
+
+artifacts:
+  # If your prune/build leaves the site in docs/ or built/ or staticpkg/, update this path.
+  # For many PXT targets, staticpkg emits to ./built/packaged
+  objects:
+    location: gs://$PROJECT_ID-cloudbuild-artifacts/springbot-site
+    paths:
+      - built/**
+
+# (Optional) timeouts, if you want
+timeout: "3600s"
