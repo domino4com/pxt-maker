@@ -121,3 +121,22 @@ steps:
 #      - "built/**"
 #      - "docs/**"
 #      - "release/**"
+
+# 7) Build a static site and deploy to Firebase Hosting
+- id: "Static pkg + Firebase deploy"
+  name: node:18
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -euxo pipefail
+
+      # Build the static site into ./docs (PXT)
+      npx --yes pxt@0.5.1 staticpkg --out docs --noMini
+
+      # Install Firebase CLI
+      npm install --global --no-audit --no-fund firebase-tools@13
+
+      # Deploy directly to the default Hosting site springbot-co-za
+      firebase deploy --only hosting --project springbot-co-za
+
