@@ -64,11 +64,13 @@ prune_dir() {
 # Prune only the canonical libs tree
 prune_dir "$ROOT/pxt-common-packages/libs"
 
-# **Critical fix**: nuke the duplicate project-level tree entirely.
+# Use the canonical libs tree
 rm -rf "$ROOT/libs" || true
-echo "Removed $ROOT/libs to avoid duplicate package trees"
+ln -s "$ROOT/pxt-common-packages/libs" "$ROOT/libs"
 
-# Remove @types/node everywhere to avoid TS typing conflicts
+# (Optional) one-time cleanup here is ok, but we'll also purge in the build step
 rm -rf "$ROOT"/node_modules/@types/node \
        "$ROOT"/pxt/node_modules/@types/node \
        "$ROOT"/pxt-common-packages/node_modules/@types/node || true
+
+echo "Linked $ROOT/libs -> pxt-common-packages/libs"
