@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Run from repo root (/workspace in Cloud Build)
 ROOT="$(pwd)"
 
 prune_dir() {
@@ -20,7 +21,7 @@ prune_dir() {
       -name '*---vm' \
     \) -print0 | xargs -0 rm -rf || true
 
-  # 2) Remove board families that trigger other hex caches
+  # 2) Remove board folders that trigger hex cache builds
   find "$D" -maxdepth 1 -type d \( \
       -name 'adafruit-*' -o \
       -name 'arduino-*'  -o \
@@ -34,11 +35,11 @@ prune_dir() {
       -name 'jacdac-*'   \
     \) -print0 | xargs -0 rm -rf || true
 
-  # 3) Remove features we don’t want
+  # 3) Remove features we don’t want on ESP32-S2 web build
   rm -rf "$D"/{radio,radio-broadcast,net,net-game,mqtt,azureiot,lora} || true
 
-  # 4) Minimal whitelist
-  local keep=(
+  # 4) Keep *only* a minimal whitelist; nuke the rest if you still see stragglers
+  keep=(
     accelerometer animation base buttons color controller core core---esp32 core---esp32s2
     datalogger display edge-connector esp32 keyboard lcd light lightsensor matrix-keypad
     microphone mixer mixer---none mouse pixel power proximity pulse screen screen---st7735
@@ -46,9 +47,11 @@ prune_dir() {
     text-to-speech thermometer touch wifi---esp32
   )
 
-  local pat="$(printf '|%s' "${keep[@]}")"
+  # Turn whitelist into a grep pattern
+  pat="$(printf '|%s' "${keep[@]}")"
   pat="^($(echo "${pat:1}")|tsconfig\.json)$"
 
+  # Remove anything not whitelisted (safeguard core---esp32/esp32s2 kept above)
   for dir in "$D"/*; do
     [ -d "$dir" ] || continue
     base="$(basename "$dir")"
@@ -61,16 +64,15 @@ prune_dir() {
   ls -1 "$D" || true
 }
 
-# Prune only the canonical libs tree
+# Prune both repos’ libs folders
 prune_dir "$ROOT/pxt-common-packages/libs"
 
-# Use the canonical libs tree
+# Replace libs with symlink to pruned common packages
 rm -rf "$ROOT/libs" || true
 ln -s "$ROOT/pxt-common-packages/libs" "$ROOT/libs"
+echo "Linked $ROOT/libs -> pxt-common-packages/libs"
 
-# (Optional) one-time cleanup here is ok, but we'll also purge in the build step
+# Remove @types/node everywhere to avoid TS typing conflicts
 rm -rf "$ROOT"/node_modules/@types/node \
        "$ROOT"/pxt/node_modules/@types/node \
        "$ROOT"/pxt-common-packages/node_modules/@types/node || true
-
-echo "Linked $ROOT/libs -> pxt-common-packages/libs"
