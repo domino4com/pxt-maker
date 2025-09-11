@@ -3,7 +3,6 @@ timeout: "1200s"  # 20 minutes
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
-  substitutionOption: ALLOW_LOOSE
 
 substitutions:
   _REPO_PXT: https://github.com/domino4com/pxt.git
@@ -16,38 +15,21 @@ steps:
 - name: gcr.io/cloud-builders/git
   id: Clone pxt
   entrypoint: bash
-  args: ["-lc", 'git clone "$_REPO_PXT" pxt']
+  args: ["-lc", "git clone \"$_REPO_PXT\" pxt"]
 
 # 1) Clone common packages
 - name: gcr.io/cloud-builders/git
   id: Clone pxt-common-packages
   entrypoint: bash
-  args: ["-lc", 'git clone "$_REPO_PKGS" pxt-common-packages']
+  args: ["-lc", "git clone \"$_REPO_PKGS\" pxt-common-packages"]
 
-# 2) Prune to ESP32-S2 and fix light variants + disable sim
+# 2) Prune to ESP32-S2 (this lives in repo root)
 - name: node:18
   id: Prune to ESP32-S2
   entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euo pipefail
-      chmod +x scripts/prune-for-esp32s2.sh
-      ./scripts/prune-for-esp32s2.sh
+  args: ["-lc", "chmod +x scripts/prune-for-esp32s2.sh && ./scripts/prune-for-esp32s2.sh"]
 
-      # Create required light variants inside the REAL libs dir
-      REAL_LIBS="$(readlink -f libs || echo libs)"
-      mkdir -p "$REAL_LIBS"
-      pushd "$REAL_LIBS" >/dev/null
-        [ -d base ] && { [ -e base---light ] || ln -s base base---light; }
-        # Add any other light variants your target expects:
-        # [ -d game ] && { [ -e game---light ] || ln -s game game---light; }
-      popd >/dev/null
-
-      # TEMP: skip building target sim until we clean dalboard.ts
-      rm -rf sim
-
-# 3) Install target deps without running scripts
+# 3) Install deps without running postinstall/prepare hooks (faster, fewer side-effects)
 - name: node:18
   id: Install target deps (no scripts)
   entrypoint: bash
@@ -58,32 +40,37 @@ steps:
       npm config set audit false
       npm install --ignore-scripts
 
-# 4) Link local pxt repos + reinstall (no scripts)
+# 4) Link local PXT repos (so pxt-cli resolves to our checked-out sources)
 - name: node:18
   id: Link local pxt repos
   entrypoint: bash
   args:
     - -lc
     - |
-      rm -rf node_modules/pxt-core node_modules/pxt-common-packages || true
       npx --yes pxt@0.5.1 link ./pxt
       npx --yes pxt@0.5.1 link ./pxt-common-packages
       npm install --ignore-scripts
 
-# 5) Build static package
+# 5) Prepare libs for staticpkg: COPY (not symlink) the pruned libs where PXT expects them
 - name: node:18
-  id: Build static package
+  id: Stage libs
   entrypoint: bash
   args:
     - -lc
     - |
-      set -euo pipefail
-      echo "libs -> $(readlink -f libs || echo libs)"
-      # Remove Node typings that confuse TS
+      rm -rf libs
+      # copy pruned libs tree from pxt-common-packages into ./libs
+      cp -a pxt-common-packages/libs ./libs
+      # belt & suspenders: ensure no @types/node lingering that could confuse TS
       rm -rf node_modules/@types/node pxt/node_modules/@types/node pxt-common-packages/node_modules/@types/node || true
-      npx --yes pxt@0.5.1 staticpkg
 
-# 6) Deploy to Firebase Hosting
+# 6) Build the static web package (no hex cache builds since we pruned families/boards)
+- name: node:18
+  id: Build static package
+  entrypoint: bash
+  args: ["-lc", "npx --yes pxt@0.5.1 staticpkg"]
+
+# 7) Deploy to Firebase Hosting
 - name: gcr.io/cloud-builders/gcloud
   id: Firebase deploy
   entrypoint: bash
