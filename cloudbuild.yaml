@@ -1,114 +1,142 @@
-# cloudbuild.yaml — springbot (ESP32-S2 / PXT) — no PUB variable
-
-timeout: "3600s"
-
-substitutions:
-  _FIREBASE_PROJECT: "springbot-co-za"
-  _FIREBASE_SITE:    "springbot-co-za"
-  _REPO_PXT:  "https://github.com/domino4com/pxt.git"
-  _REPO_PKGS: "https://github.com/domino4com/pxt-common-packages.git"
+# Cloud Build for springbot-co-za
+# Substitutions expected on the trigger:
+#   _GITHUB_ORG=domino4com
+#   _REPO_PXT=https://github.com/domino4com/pxt.git
+#   _REPO_PKGS=https://github.com/domino4com/pxt-common-packages.git
+#   _FIREBASE_PROJECT=springbot-co-za
+#   _FIREBASE_SITE=springbot-co-za
 
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
 
 steps:
-  # Step 0: Clone repos
-  - name: gcr.io/cloud-builders/git
-    id: Clone pxt
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euo pipefail
-        git clone "${_REPO_PXT}" pxt
-        git clone "${_REPO_PKGS}" pxt-common-packages
+# 0) Clone PXT + common packages
+- name: gcr.io/cloud-builders/git
+  id: Clone pxt
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -e
+      git clone "${_REPO_PXT}" pxt
+      git clone "${_REPO_PKGS}" pxt-common-packages
 
-  # Step 1: Build pxt core
-  - name: node:18
-    id: Build pxt core
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euo pipefail
-        cd pxt
-        rm -f package-lock.json
-        npm install
-        npm run build
+# 1) Build pxt core
+- name: node:18
+  id: Build pxt core
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -e
+      cd pxt
+      rm -f package-lock.json
+      npm ci || npm install
+      npm run build
 
-  # Step 2: Install pxt-common-packages deps
-  - name: node:18
-    id: Install pxt-common-packages
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euo pipefail
-        cd pxt-common-packages
-        rm -f package-lock.json
-        npm install
+# 2) Install pxt-common-packages deps
+- name: node:18
+  id: Install pxt-common-packages
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -e
+      cd pxt-common-packages
+      rm -f package-lock.json
+      npm ci || npm install
 
-  # Step 3: Install target deps (this repo)
-  - name: node:18
-    id: Install target deps (pxt-maker)
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euo pipefail
-        rm -f package-lock.json
-        npm install
+# 3) Install target deps (root of repo is the target)
+- name: node:18
+  id: Install target deps (pxt-maker)
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -e
+      rm -f package-lock.json
+      npm ci || npm install
 
-  # Step 4: Prune + link (ESP32-S2)
-  - name: node:18
-    id: Prune + link for ESP32-S2
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euo pipefail
-        chmod +x scripts/prune-for-esp32s2.sh
-        ./scripts/prune-for-esp32s2.sh
+# 4) Prune for ESP32-S2 (your script)
+- name: node:18
+  id: Prune for ESP32-S2 (springbot)
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -e
+      chmod +x scripts/prune-for-esp32s2.sh
+      ./scripts/prune-for-esp32s2.sh
 
-        # Clean and link local pxt + pxt-common-packages
-        rm -rf node_modules package-lock.json
-        rm -rf pxt/node_modules pxt-common-packages/node_modules
-        npm config set fund false
-        npm config set audit false
+# 5) Link & build target (no flags that cause issues)
+- name: node:18
+  id: Link target
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -e
+      # Make sure we start clean to avoid old node_modules conflicts
+      rm -rf node_modules pxt/node_modules pxt-common-packages/node_modules package-lock.json
+      npm config set fund false
+      npm config set audit false
+      npx --yes pxt@0.5.1 link ./pxt
+      npx --yes pxt@0.5.1 link ./pxt-common-packages
+      npm install
 
-        npx --yes pxt@0.5.1 link ./pxt
-        npx --yes pxt@0.5.1 link ./pxt-common-packages
+# 6) Static pkg (NO flags; outputs to ./docs)
+- name: node:18
+  id: Static pkg
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -e
+      npx --yes pxt@0.5.1 staticpkg
+      test -d docs && echo "staticpkg produced ./docs" || (echo "ERROR: ./docs was not created" && exit 1)
 
-        npm install
+# 7) Write firebase.json (public=docs, site=springbot-co-za)
+- name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+  id: Write firebase.json
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -e
+      cat > firebase.json <<'EOF'
+      {
+        "hosting": {
+          "site": "springbot-co-za",
+          "public": "docs",
+          "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+          "rewrites": [{ "source": "**", "destination": "/index.html" }]
+        }
+      }
+      EOF
+      cat firebase.json
 
-  # Step 5: Build static package (outputs to ./docs by default)
-  - name: node:18
-    id: Static pkg
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euo pipefail
-        npx --yes pxt@0.5.1 staticpkg --noMini
-
-  # Step 6: Deploy to Firebase Hosting (default site)
-  - name: gcr.io/firebase-cli-project/firebase
-    id: Deploy to Firebase Hosting
-    entrypoint: bash
-    env:
-      - CI=true
-    args:
-      - -lc
-      - |
-        set -euo pipefail
-        firebase deploy \
-          --non-interactive \
-          --project "${_FIREBASE_PROJECT}" \
-          --only "hosting:${_FIREBASE_SITE}"
+# 8) Deploy to Firebase Hosting (use gcloud access token)
+- name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+  id: Firebase deploy
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -e
+      # Install firebase-tools (standalone script)
+      curl -sL https://firebase.tools | bash
+      ACCESS_TOKEN="$(gcloud auth print-access-token)"
+      firebase deploy \
+        --only "hosting:${_FIREBASE_SITE}" \
+        --project "${_FIREBASE_PROJECT}" \
+        --non-interactive \
+        --token "${ACCESS_TOKEN}"
 
 artifacts:
   objects:
-    location: "gs://${_FIREBASE_PROJECT}-cb-artifacts/${BUILD_ID}"
+    location: gs://$_FIREBASE_PROJECT-build-artifacts/$BUILD_ID
     paths:
-      - "docs/**"
+      - docs/**
+
+timeout: "3600s"
