@@ -1,141 +1,126 @@
-# Cloud Build for springbot-co-za
-# Substitutions expected on the trigger:
-#   _GITHUB_ORG=domino4com
-#   _REPO_PXT=https://github.com/domino4com/pxt.git
-#   _REPO_PKGS=https://github.com/domino4com/pxt-common-packages.git
-#   _FIREBASE_PROJECT=springbot-co-za
-#   _FIREBASE_SITE=springbot-co-za
+timeout: "3600s"
+
+substitutions:
+  _FIREBASE_PROJECT: "springbot-co-za"
+  _FIREBASE_SITE: "springbot-co-za"
+  _REPO_PXT: "https://github.com/domino4com/pxt.git"
+  _REPO_PKGS: "https://github.com/domino4com/pxt-common-packages.git"
 
 options:
   logging: CLOUD_LOGGING_ONLY
-  machineType: E2_HIGHCPU_8
+  machineType: "E2_HIGHCPU_8"
 
 steps:
-# 0) Clone PXT + common packages
+# 0) Clone PXT core
 - name: gcr.io/cloud-builders/git
   id: Clone pxt
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -e
-      git clone "${_REPO_PXT}" pxt
-      git clone "${_REPO_PKGS}" pxt-common-packages
+  args: ["clone", "$_REPO_PXT", "pxt"]
 
-# 1) Build pxt core
+# 1) Clone common packages
+- name: gcr.io/cloud-builders/git
+  id: Clone pxt-common-packages
+  args: ["clone", "$_REPO_PKGS", "pxt-common-packages"]
+
+# 2) Build PXT core (NO sub-apps)
 - name: node:18
-  id: Build pxt core
+  id: Build pxt core (no sub-apps)
+  dir: pxt
   entrypoint: bash
+  env:
+    - CI=true
+    - npm_config_fund=false
+    - npm_config_audit=false
   args:
     - -lc
     - |
-      set -e
-      cd pxt
+      set -euo pipefail
       rm -f package-lock.json
-      npm ci || npm install
-      npm run build
+      npm ci --ignore-scripts
+      ./node_modules/.bin/gulp pxtlib pxtcompiler pxtsim pxtpy pxteditor pxtblocks pxtservices pxtrunner cli targetjs reactCommon buildcss webapp browserifyWebapp browserifyAssetEditor semanticjs buildBlocksTestRunner
 
-# 2) Install pxt-common-packages deps
+# 3) Install deps for common packages (no scripts)
 - name: node:18
-  id: Install pxt-common-packages
+  id: Install pxt-common-packages deps
+  dir: pxt-common-packages
   entrypoint: bash
+  env:
+    - CI=true
+    - npm_config_fund=false
+    - npm_config_audit=false
   args:
     - -lc
     - |
-      set -e
-      cd pxt-common-packages
+      set -euo pipefail
       rm -f package-lock.json
-      npm ci || npm install
+      npm ci --ignore-scripts
 
-# 3) Install target deps (root of repo is the target)
+# 4) Prune to ESP32-S2 only + link PXT repos locally
 - name: node:18
-  id: Install target deps (pxt-maker)
+  id: Prune & link
   entrypoint: bash
+  env:
+    - CI=true
+    - npm_config_fund=false
+    - npm_config_audit=false
   args:
     - -lc
     - |
-      set -e
-      rm -f package-lock.json
-      npm ci || npm install
+      set -euo pipefail
 
-# 4) Prune for ESP32-S2 (your script)
-- name: node:18
-  id: Prune for ESP32-S2 (springbot)
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -e
+      # Prune libs to ESP32-S2
       chmod +x scripts/prune-for-esp32s2.sh
       ./scripts/prune-for-esp32s2.sh
 
-# 5) Link & build target (no flags that cause issues)
-- name: node:18
-  id: Link target
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -e
-      # Make sure we start clean to avoid old node_modules conflicts
-      rm -rf node_modules pxt/node_modules pxt-common-packages/node_modules package-lock.json
-      npm config set fund false
-      npm config set audit false
+      # Ensure a clean node_modules at repo root
+      rm -rf node_modules package-lock.json
+
+      # Link local PXT core + pkgs into this target repo
       npx --yes pxt@0.5.1 link ./pxt
       npx --yes pxt@0.5.1 link ./pxt-common-packages
-      npm install
 
-# 6) Static pkg (NO flags; outputs to ./docs)
+      # Minimal install for target itself (no postinstall scripts)
+      npm ci --ignore-scripts
+
+# 5) Static package to docs/  (NOTE: --output)
 - name: node:18
   id: Static pkg
   entrypoint: bash
+  env:
+    - CI=true
   args:
     - -lc
     - |
-      set -e
-      npx --yes pxt@0.5.1 staticpkg
-      test -d docs && echo "staticpkg produced ./docs" || (echo "ERROR: ./docs was not created" && exit 1)
+      set -euo pipefail
+      npx --yes pxt@0.5.1 staticpkg --output docs
 
-# 7) Write firebase.json (public=docs, site=springbot-co-za)
-- name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-  id: Write firebase.json
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -e
-      cat > firebase.json <<'EOF'
-      {
-        "hosting": {
-          "site": "springbot-co-za",
-          "public": "docs",
-          "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-          "rewrites": [{ "source": "**", "destination": "/index.html" }]
-        }
-      }
-      EOF
-      cat firebase.json
-
-# 8) Deploy to Firebase Hosting (use gcloud access token)
-- name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+# 6) Deploy to Firebase Hosting (default site)
+#    We avoid Cloud Build substitutions for tokens (those caused earlier errors).
+#    The CLI will use a fresh access token from gcloud.
+- name: node:18
   id: Firebase deploy
   entrypoint: bash
+  env:
+    - CI=true
+    - NO_UPDATE_NOTIFIER=true
   args:
     - -lc
     - |
-      set -e
-      curl -sL https://firebase.tools | bash
-      ACCESS_TOKEN="$$(gcloud auth print-access-token)"
+      set -euo pipefail
+      npm i -g firebase-tools@13
+      # Print versions for traceability
+      node -v && npm -v && firebase --version
+      # Use an access token produced inside the build (no YAML substitution)
       firebase deploy \
+        --project "$_FIREBASE_PROJECT" \
         --only "hosting:${_FIREBASE_SITE}" \
-        --project "${_FIREBASE_PROJECT}" \
         --non-interactive \
-        --token "$${ACCESS_TOKEN}"
+        --token "$(gcloud auth print-access-token)"
 
 artifacts:
   objects:
-    location: gs://$_FIREBASE_PROJECT-build-artifacts/$BUILD_ID
+    location: gs://$_FIREBASE_PROJECT-build-artifacts/pxt-maker/${BUILD_ID}
     paths:
       - docs/**
 
-timeout: "3600s"
+# Optional cache to speed up rebuilds
+# (You can enable a Cloud Build cache in your project settings as well.)
