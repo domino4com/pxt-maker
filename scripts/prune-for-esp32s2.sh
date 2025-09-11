@@ -1,23 +1,75 @@
 #!/usr/bin/env bash
-set -euxo pipefail
+set -euo pipefail
 
-# 1) Drop non-ESP MCUs (rp2040/samd/stm32/nrf52) so PXT won’t try to build their caches
-pushd pxt-common-packages/libs
-find . -maxdepth 1 -type d \( -name '*---rp2040' -o -name '*---samd' -o -name '*---stm32' -o -name '*---nrf52' \) -print0 | xargs -0 rm -rf || true
-rm -rf core---rp2040 core---samd mixer---samd mixer---stm32 mixer---nrf52 || true
+# Run from repo root (/workspace in Cloud Build)
+ROOT="$(pwd)"
 
-# 2) Always remove connectivity stacks for now (we’ll re-enable later):
-#    azureiot, mqtt, net (and radios we don’t use)
-rm -rf azureiot mqtt net net-game radio radio-broadcast lora || true
-popd
+prune_dir() {
+  local D="$1"
+  [ -d "$D" ] || return 0
+  echo "Pruning in: $D"
 
-# 3) Prevent Node typings from polluting TS build
-rm -rf node_modules/@types/node || true
-rm -rf pxt-common-packages/node_modules/@types/node || true
-rm -rf pxt/node_modules/@types/node || true
+  # 1) Remove all non-ESP cores across families
+  find "$D" -maxdepth 1 -type d \( \
+      -name '*---samd'  -o \
+      -name '*---samd21' -o \
+      -name '*---samd51' -o \
+      -name '*---stm32' -o \
+      -name '*---nrf52' -o \
+      -name '*---rp2040' -o \
+      -name '*---linux' -o \
+      -name '*---vm' \
+    \) -print0 | xargs -0 rm -rf || true
 
-# 4) Remove settings overrides that reference non-ESP DAL constants (harmless if absent)
-find pxt-common-packages -path '*/settings/targetoverrides.ts' -print0 | xargs -0 rm -f || true
+  # 2) Remove board folders that trigger hex cache builds
+  find "$D" -maxdepth 1 -type d \( \
+      -name 'adafruit-*' -o \
+      -name 'arduino-*'  -o \
+      -name 'sparkfun-*' -o \
+      -name 'nucleo-*'   -o \
+      -name 'rpi-pico'   -o \
+      -name 'xinabox-*'  -o \
+      -name 'brain-*'    -o \
+      -name 'stitchkit'  -o \
+      -name 'machachi'   -o \
+      -name 'jacdac-*'   \
+    \) -print0 | xargs -0 rm -rf || true
 
-echo "Prune complete. Remaining libs:"
-ls -1 pxt-common-packages/libs || true
+  # 3) Remove features we don’t want on ESP32-S2 web build
+  rm -rf "$D"/{radio,radio-broadcast,net,net-game,mqtt,azureiot,lora} || true
+
+  # 4) Keep *only* a minimal whitelist; nuke the rest if you still see stragglers
+  #    (adjust as your springbot build needs grow)
+  keep=(
+    accelerometer animation base buttons color controller core core---esp32 core---esp32s2
+    datalogger display edge-connector esp32 keyboard lcd light lightsensor matrix-keypad
+    microphone mixer mixer---none mouse pixel power proximity pulse screen screen---st7735
+    serial servo settings settings---esp32 settings---files storage switch tests
+    text-to-speech thermometer touch wifi---esp32
+  )
+
+  # Turn whitelist into a grep pattern
+  pat="$(printf '|%s' "${keep[@]}")"
+  pat="^($(echo "${pat:1}")|tsconfig\.json)$"
+
+  # Remove anything not whitelisted (safeguard core---esp32/esp32s2 kept above)
+  for dir in "$D"/*; do
+    [ -d "$dir" ] || continue
+    base="$(basename "$dir")"
+    if ! [[ "$base" =~ $pat ]]; then
+      rm -rf "$dir"
+    fi
+  done
+
+  echo "Remaining in $D:"
+  ls -1 "$D" || true
+}
+
+# Prune both repos’ libs folders
+prune_dir "$ROOT/pxt-common-packages/libs"
+prune_dir "$ROOT/libs"
+
+# Remove @types/node everywhere to avoid TS typing conflicts
+rm -rf "$ROOT"/node_modules/@types/node \
+       "$ROOT"/pxt/node_modules/@types/node \
+       "$ROOT"/pxt-common-packages/node_modules/@types/node || true
