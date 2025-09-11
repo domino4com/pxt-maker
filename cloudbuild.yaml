@@ -124,14 +124,13 @@ steps:
     - -lc
     - |
       set -e
-      # Install firebase-tools (standalone script)
       curl -sL https://firebase.tools | bash
-      ACCESS_TOKEN="$(gcloud auth print-access-token)"
+      ACCESS_TOKEN="$$(gcloud auth print-access-token)"
       firebase deploy \
         --only "hosting:${_FIREBASE_SITE}" \
         --project "${_FIREBASE_PROJECT}" \
         --non-interactive \
-        --token "${ACCESS_TOKEN}"
+        --token "$${ACCESS_TOKEN}"
 
 artifacts:
   objects:
