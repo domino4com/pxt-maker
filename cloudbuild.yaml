@@ -51,8 +51,12 @@ steps:
       - -lc
       - |
         set -euxo pipefail
+        # Remove installed copies so pxt can replace them with symlinks
+        rm -rf node_modules/pxt-core node_modules/pxt-common-packages || true
         npx --yes pxt@0.5.1 link ./pxt
         npx --yes pxt@0.5.1 link ./pxt-common-packages
+        # Re-run install to ensure deps resolve through the links
+        npm install --ignore-scripts
 
   - id: "Build static package"
     name: node:18
@@ -77,7 +81,7 @@ steps:
 
         rm -rf hosting
         mkdir -p hosting
-        # IMPORTANT: escape Cloud Build substitution so Bash can expand it
+        # Escape Cloud Build substitution so Bash expands SRC
         cp -a "$${SRC}/." hosting/
 
         cat > firebase.json <<'JSON'
