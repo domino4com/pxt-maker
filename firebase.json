@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "site": "springbot",
+    "site": "springbot-co-za",
     "public": "docs",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [{ "source": "**", "destination": "/index.html" }]
