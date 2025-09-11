@@ -1,144 +1,114 @@
+# cloudbuild.yaml — springbot (ESP32-S2 / PXT) — no PUB variable
+
+timeout: "3600s"
+
+substitutions:
+  _FIREBASE_PROJECT: "springbot-co-za"
+  _FIREBASE_SITE:    "springbot-co-za"
+  _REPO_PXT:  "https://github.com/domino4com/pxt.git"
+  _REPO_PKGS: "https://github.com/domino4com/pxt-common-packages.git"
+
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
 
-substitutions:
-  _REPO_PXT: "https://github.com/domino4com/pxt.git"
-  _REPO_PKGS: "https://github.com/domino4com/pxt-common-packages.git"
-  _FIREBASE_PROJECT: "springbot-co-za"
-
 steps:
-# 0) Clone pxt
-- name: gcr.io/cloud-builders/git
-  id: "Clone pxt"
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      git clone ${_REPO_PXT} pxt
+  # Step 0: Clone repos
+  - name: gcr.io/cloud-builders/git
+    id: Clone pxt
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        git clone "${_REPO_PXT}" pxt
+        git clone "${_REPO_PKGS}" pxt-common-packages
 
-# 1) Clone pxt-common-packages
-- name: gcr.io/cloud-builders/git
-  id: "Clone pxt-common-packages"
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      git clone ${_REPO_PKGS} pxt-common-packages
+  # Step 1: Build pxt core
+  - name: node:18
+    id: Build pxt core
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        cd pxt
+        rm -f package-lock.json
+        npm install
+        npm run build
 
-# 2) Build pxt core
-- name: node:18
-  id: "Build pxt core"
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      cd pxt
-      rm -f package-lock.json
-      npm ci || npm install
-      npm run build
+  # Step 2: Install pxt-common-packages deps
+  - name: node:18
+    id: Install pxt-common-packages
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        cd pxt-common-packages
+        rm -f package-lock.json
+        npm install
 
-# 3) Install pxt-common-packages deps
-- name: node:18
-  id: "Install pxt-common-packages"
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      cd pxt-common-packages
-      rm -f package-lock.json
-      npm ci || npm install
+  # Step 3: Install target deps (this repo)
+  - name: node:18
+    id: Install target deps (pxt-maker)
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        rm -f package-lock.json
+        npm install
 
-# 4) Install target deps (root)
-- name: node:18
-  id: "Install target deps (pxt-maker)"
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      rm -f package-lock.json
-      npm ci || npm install
+  # Step 4: Prune + link (ESP32-S2)
+  - name: node:18
+    id: Prune + link for ESP32-S2
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        chmod +x scripts/prune-for-esp32s2.sh
+        ./scripts/prune-for-esp32s2.sh
 
-# 5) Prune for ESP32-S2 (springbot) and link
-- name: node:18
-  id: "Prune for ESP32-S2 (springbot)"
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      chmod +x scripts/prune-for-esp32s2.sh
-      ./scripts/prune-for-esp32s2.sh
-      npm config set fund false
-      npm config set audit false
-      npx --yes pxt@0.5.1 link ./pxt
-      npx --yes pxt@0.5.1 link ./pxt-common-packages
+        # Clean and link local pxt + pxt-common-packages
+        rm -rf node_modules package-lock.json
+        rm -rf pxt/node_modules pxt-common-packages/node_modules
+        npm config set fund false
+        npm config set audit false
 
-# 6) Re-install after linking
-- name: node:18
-  id: "Link & build target"
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      rm -rf node_modules package-lock.json
-      npm ci || npm install
+        npx --yes pxt@0.5.1 link ./pxt
+        npx --yes pxt@0.5.1 link ./pxt-common-packages
 
-# 7) Static pkg + Firebase deploy (no $PUB in YAML)
-- name: node:18
-  id: "Static pkg + Firebase deploy"
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
+        npm install
 
-      # Build static package
-      npx --yes pxt@0.5.1 staticpkg --noMini
+  # Step 5: Build static package (outputs to ./docs by default)
+  - name: node:18
+    id: Static pkg
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        npx --yes pxt@0.5.1 staticpkg --noMini
 
-      # Detect output dir
-      PUB=""
-      for d in docs built/packaged pxt/built/web built/web; do
-        if [ -d "$d" ]; then PUB="$d"; break; fi
-      done
-      if [ -z "$PUB" ]; then
-        echo "Could not find staticpkg output."
-        find . -maxdepth 3 -type d | sed 's|^\./||'
-        exit 1
-      fi
-      echo "Using public dir: ${PUB}"
-
-      # Write firebase config with placeholder, then replace via sed
-      cat > firebase.json <<'EOF'
-      {
-        "hosting": {
-          "public": "__PUBLIC_DIR__",
-          "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
-        }
-      }
-      EOF
-      sed -i "s|__PUBLIC_DIR__|${PUB}|g" firebase.json
-
-      cat > .firebaserc <<EOF
-      {
-        "projects": {
-          "default": "${_FIREBASE_PROJECT}"
-        }
-      }
-      EOF
-
-      npm i -g firebase-tools
-      firebase deploy --only hosting --project "${_FIREBASE_PROJECT}" --non-interactive
+  # Step 6: Deploy to Firebase Hosting (default site)
+  - name: gcr.io/firebase-cli-project/firebase
+    id: Deploy to Firebase Hosting
+    entrypoint: bash
+    env:
+      - CI=true
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        firebase deploy \
+          --non-interactive \
+          --project "${_FIREBASE_PROJECT}" \
+          --only "hosting:${_FIREBASE_SITE}"
 
 artifacts:
   objects:
-    location: gs://$PROJECT_ID-build-artifacts/staticpkg/
+    location: "gs://${_FIREBASE_PROJECT}-cb-artifacts/${BUILD_ID}"
     paths:
       - "docs/**"
-      - "built/packaged/**"
-      - "pxt/built/web/**"
-      - "built/web/**"
