@@ -1,56 +1,47 @@
-# Cloud Build config for pxt-maker (ESP32-S2 / springbot)
-# - Clones pxt and pxt-common-packages
-# - Builds pxt core
-# - Installs pxt-common-packages
-# - Installs target deps
-# - Prunes libs for ESP32-S2
-# - Links local pxt + pxt-common-packages BEFORE npm install (prevents "Could not remove pxt-core")
-
-timeout: "3600s"
-
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
 
+substitutions:
+  _REPO_PXT: "https://github.com/domino4com/pxt.git"
+  _REPO_PKGS: "https://github.com/domino4com/pxt-common-packages.git"
+  _FIREBASE_PROJECT: "springbot-co-za"
+
 steps:
 # 0) Clone pxt
-- id: "Clone pxt"
-  name: gcr.io/cloud-builders/git
+- name: gcr.io/cloud-builders/git
+  id: "Clone pxt"
   entrypoint: bash
   args:
     - -lc
     - |
-      set -euxo pipefail
-      git clone https://github.com/domino4com/pxt.git
+      git clone ${_REPO_PXT} pxt
 
 # 1) Clone pxt-common-packages
-- id: "Clone pxt-common-packages"
-  name: gcr.io/cloud-builders/git
+- name: gcr.io/cloud-builders/git
+  id: "Clone pxt-common-packages"
   entrypoint: bash
   args:
     - -lc
     - |
-      set -euxo pipefail
-      git clone https://github.com/domino4com/pxt-common-packages.git
+      git clone ${_REPO_PKGS} pxt-common-packages
 
 # 2) Build pxt core
-- id: "Build pxt core"
-  name: node:18
+- name: node:18
+  id: "Build pxt core"
   entrypoint: bash
   args:
     - -lc
     - |
       set -euxo pipefail
-      node -v
-      npm -v
       cd pxt
       rm -f package-lock.json
-      npm install
+      npm ci || npm install
       npm run build
 
-# 3) Install pxt-common-packages
-- id: "Install pxt-common-packages"
-  name: node:18
+# 3) Install pxt-common-packages deps
+- name: node:18
+  id: "Install pxt-common-packages"
   entrypoint: bash
   args:
     - -lc
@@ -58,85 +49,100 @@ steps:
       set -euxo pipefail
       cd pxt-common-packages
       rm -f package-lock.json
-      npm install
+      npm ci || npm install
 
-# 4) Install target deps (this repo: pxt-maker)
-- id: "Install target deps (pxt-maker)"
-  name: node:18
+# 4) Install target deps (root)
+- name: node:18
+  id: "Install target deps (pxt-maker)"
   entrypoint: bash
   args:
     - -lc
     - |
       set -euxo pipefail
-      node -v
-      npm -v
       rm -f package-lock.json
-      npm install
+      npm ci || npm install
 
 # 5) Prune for ESP32-S2 (springbot)
-- id: "Prune for ESP32-S2 (springbot)"
-  name: node:18
+- name: node:18
+  id: "Prune for ESP32-S2 (springbot)"
   entrypoint: bash
   args:
     - -lc
     - |
       set -euxo pipefail
-      test -f scripts/prune-for-esp32s2.sh
       chmod +x scripts/prune-for-esp32s2.sh
       ./scripts/prune-for-esp32s2.sh
-
-# 6) Link & build target (link FIRST, then install)
-- id: "Link & build target"
-  name: node:18
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-
-      # Clean any stale installs so linking won't try to remove pxt-core
-      rm -rf node_modules package-lock.json || true
-      rm -rf pxt/node_modules pxt-common-packages/node_modules || true
-
-      # Ensure npx won’t try to install an older global pxt into node_modules
+      # Link pxt + common packages into node_modules so CLI finds local builds
       npm config set fund false
       npm config set audit false
-
-      # Link local pxt and pxt-common-packages into this target
       npx --yes pxt@0.5.1 link ./pxt
       npx --yes pxt@0.5.1 link ./pxt-common-packages
 
-      # Now install the target deps (will respect linked pxt-core)
-      npm install
+# 6) Re-install root deps (after links)
+- name: node:18
+  id: "Link & build target"
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -euxo pipefail
+      rm -rf node_modules package-lock.json
+      npm ci || npm install
 
-      # Optional: build the target (adjust if you have a specific script)
-      # If your target has its own build script, uncomment:
-      # npm run build || true
-
-# (Optional) Artifacts — add if you produce a dist folder you want to keep
-#artifacts:
-#  objects:
-#    location: gs://YOUR_BUCKET/pxt-maker/$BUILD_ID/
-#    paths:
-#      - "built/**"
-#      - "docs/**"
-#      - "release/**"
-
-# 7) Build a static site and deploy to Firebase Hosting
-- id: "Static pkg + Firebase deploy"
-  name: node:18
+# 7) Static pkg + Firebase deploy
+- name: node:18
+  id: "Static pkg + Firebase deploy"
   entrypoint: bash
   args:
     - -lc
     - |
       set -euxo pipefail
 
-      # Build the static site into ./docs (PXT)
-      npx --yes pxt@0.5.1 staticpkg --out docs --noMini
+      # Build a static package (no unsupported flags)
+      npx --yes pxt@0.5.1 staticpkg --noMini
 
-      # Install Firebase CLI
-      npm install --global --no-audit --no-fund firebase-tools@13
+      # Detect public dir
+      PUB=""
+      for d in docs built/packaged pxt/built/web built/web; do
+        if [ -d "$d" ]; then PUB="$d"; break; fi
+      done
+      if [ -z "$PUB" ]; then
+        echo "Could not find staticpkg output. Known dirs not present."
+        echo "Tree for debugging:"
+        find . -maxdepth 3 -type d | sed 's|^\./||'
+        exit 1
+      fi
+      echo "Using public dir: $PUB"
 
-      # Deploy directly to the default Hosting site springbot-co-za
-      firebase deploy --only hosting --project springbot-co-za
+      # Write firebase config for this build
+      cat > firebase.json <<EOF
+      {
+        "hosting": {
+          "public": "$PUB",
+          "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
+        }
+      }
+      EOF
 
+      cat > .firebaserc <<EOF
+      {
+        "projects": {
+          "default": "${_FIREBASE_PROJECT}"
+        }
+      }
+      EOF
+
+      # Install firebase-tools and deploy
+      npm i -g firebase-tools
+      firebase --project ${_FIREBASE_PROJECT} hosting:sites:list || true
+      firebase deploy --only hosting --project ${_FIREBASE_PROJECT} --non-interactive
+
+# (Optional) Artifacts – keep the built static site
+artifacts:
+  objects:
+    location: gs://$PROJECT_ID-build-artifacts/staticpkg/
+    paths:
+      - "docs/**"
+      - "built/packaged/**"
+      - "pxt/built/web/**"
+      - "built/web/**"
