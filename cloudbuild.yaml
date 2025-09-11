@@ -18,6 +18,7 @@ steps:
     args:
       - -lc
       - |
+        set -e
         git clone "$_REPO_PXT" pxt
 
   # 1) Clone common packages
@@ -27,30 +28,78 @@ steps:
     args:
       - -lc
       - |
+        set -e
         git clone "$_REPO_PKGS" pxt-common-packages
 
-  # 2) Prune all to ESP32-S2 only
+  # 2) Prune everything to ESP32-S2 only (both repos)
   - name: node:18
     id: Prune to ESP32-S2
     entrypoint: bash
     args:
       - -lc
       - |
+        set -e
         chmod +x scripts/prune-for-esp32s2.sh
         ./scripts/prune-for-esp32s2.sh
 
-  # 3) Install project deps (published pxt-core), no postinstall scripts
+  # 2.5) Force target to ESP32-S2 only by rewriting pxttarget.json if present
   - name: node:18
-    id: Install target deps (no scripts)
+    id: Pin target to ESP32-S2 only
     entrypoint: bash
     args:
       - -lc
       - |
+        set -e
+        # Look for pxttarget.json in common locations
+        CANDIDATES=(
+          "pxttarget.json"
+          "targets/*/pxttarget.json"
+          "pxt/pxttarget.json"
+        )
+        FOUND=""
+        for c in "${CANDIDATES[@]}"; do
+          for f in $c; do
+            [ -f "$f" ] && FOUND="$f" && break 2
+          done
+        done
+        if [ -n "$FOUND" ]; then
+          echo "Pinning variants in $FOUND to [\"esp32s2\"]"
+          node -e '
+            const fs=require("fs"), p=process.argv[1];
+            const j=JSON.parse(fs.readFileSync(p,"utf8"));
+            const only=["esp32s2"];
+            const setOnly=(o,k)=>{ if(o && o[k]) o[k]=only; };
+            setOnly(j,"variants");
+            setOnly(j,"compileServiceVariants");
+            setOnly(j,"platforms");
+            setOnly(j,"hardwareVariants");
+            if (j.sim && j.sim.hardwareVariants) j.sim.hardwareVariants=only;
+            fs.writeFileSync(p, JSON.stringify(j,null,2));
+          ' "$FOUND"
+          echo "Result:"
+          cat "$FOUND"
+        else
+          echo "No pxttarget.json found; skipping variant pin."
+        fi
+
+  # 3) Install deps without running scripts, then purge Node types everywhere
+  - name: node:18
+    id: Install deps (no scripts) + purge node types
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -e
         npm config set fund false
         npm config set audit false
-        npm ci --ignore-scripts || npm install --ignore-scripts
+        # Prefer clean, fall back to install if lockfile is out-of-sync
+        (npm ci --ignore-scripts || npm install --ignore-scripts)
+        # Remove troublesome @types/node that causes TS parse errors in PXT
+        rm -rf node_modules/@types/node \
+               pxt/node_modules/@types/node \
+               pxt-common-packages/node_modules/@types/node || true
 
-  # 4) Stage libs: point /workspace/libs at the pruned set and add base---light
+  # 4) Stage libs: point ./libs at pxt-common-packages/libs and ensure base---light exists
   - name: node:18
     id: Stage libs
     entrypoint: bash
@@ -60,26 +109,26 @@ steps:
         set -e
         rm -rf libs
         ln -s /workspace/pxt-common-packages/libs ./libs
-        # PXT expects a light variant of base
-        if [ ! -d libs/base---light ]; then
-          cp -a libs/base libs/base---light
-        fi
+        # Some PXT transforms expect base---light; create it if absent
+        [ -d libs/base---light ] || cp -a libs/base libs/base---light
 
-  # 5) Build static site (no local linking to pxt)
+  # 5) Build static web (no firmware hex caches; we pruned other boards)
   - name: node:18
     id: Build static package
     entrypoint: bash
     args:
       - -lc
       - |
+        set -e
         npx --yes pxt@0.5.1 staticpkg
 
-  # 6) Deploy to Firebase Hosting
+  # 6) Deploy to Firebase Hosting (default site)
   - name: gcr.io/cloud-builders/gcloud
     id: Firebase deploy
     entrypoint: bash
     args:
       - -lc
       - |
+        set -e
         curl -sL https://firebase.tools | bash
         firebase deploy --only hosting:$_FIREBASE_SITE --project $_FIREBASE_PROJECT --non-interactive
