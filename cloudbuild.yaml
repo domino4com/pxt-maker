@@ -15,36 +15,37 @@ steps:
 - name: gcr.io/cloud-builders/git
   id: Clone pxt
   entrypoint: bash
-  args: ['-lc', 'set -euo pipefail; git clone "$_REPO_PXT" pxt']
+  args:
+    - -lc
+    - |
+      git clone "$_REPO_PXT" pxt
 
 # 1) Clone common packages
 - name: gcr.io/cloud-builders/git
   id: Clone pxt-common-packages
   entrypoint: bash
-  args: ['-lc', 'set -euo pipefail; git clone "$_REPO_PKGS" pxt-common-packages']
+  args:
+    - -lc
+    - |
+      git clone "$_REPO_PKGS" pxt-common-packages
 
-# 2) Prune everything to ESP32-S2 only (both repos) + remove repo-level libs
+# 2) Prune everything to ESP32-S2 only (both repos)
 - name: node:18
   id: Prune to ESP32-S2
   entrypoint: bash
   args:
     - -lc
     - |
-      set -euo pipefail
       chmod +x scripts/prune-for-esp32s2.sh
       ./scripts/prune-for-esp32s2.sh
-      # **Critical fix**: ensure only pxt-common-packages/libs remains
-      rm -rf libs
-      echo "Removed /workspace/libs to avoid duplicate package trees"
 
-# 3) Install target deps without running scripts (fast)
+# 3) Install target deps without running scripts (fast, fewer postinstalls)
 - name: node:18
   id: Install target deps (no scripts)
   entrypoint: bash
   args:
     - -lc
     - |
-      set -euo pipefail
       npm config set fund false
       npm config set audit false
       npm install --ignore-scripts
@@ -56,13 +57,12 @@ steps:
   args:
     - -lc
     - |
-      set -euo pipefail
       rm -rf node_modules/pxt-core node_modules/pxt-common-packages || true
       npx --yes pxt@0.5.1 link ./pxt
       npx --yes pxt@0.5.1 link ./pxt-common-packages
       npm install --ignore-scripts
 
-# 5) Build static web (after ensuring types are clean)
+# 5) Build static web (no hex caches because boards were removed)
 - name: node:18
   id: Build static package
   entrypoint: bash
@@ -70,11 +70,13 @@ steps:
     - -lc
     - |
       set -euo pipefail
-      # purge conflicting Node types everywhere
+      # Debug: confirm libs symlink exists
+      ls -ld libs || true
+      # Purge conflicting Node types everywhere
       rm -rf node_modules/@types/node \
              pxt/node_modules/@types/node \
              pxt-common-packages/node_modules/@types/node || true
-      # build
+      # Build
       npx --yes pxt@0.5.1 staticpkg
 
 # 6) Deploy to Firebase Hosting (default site)
@@ -84,6 +86,5 @@ steps:
   args:
     - -lc
     - |
-      set -euo pipefail
       curl -sL https://firebase.tools | bash
       firebase deploy --only hosting:$_FIREBASE_SITE --project $_FIREBASE_PROJECT --non-interactive
