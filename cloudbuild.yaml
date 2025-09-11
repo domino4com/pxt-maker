@@ -15,31 +15,38 @@ steps:
 - name: gcr.io/cloud-builders/git
   id: Clone pxt
   entrypoint: bash
-  args:
-    - -lc
-    - |
-      git clone "$_REPO_PXT" pxt
+  args: ["-lc", 'git clone "$_REPO_PXT" pxt']
 
 # 1) Clone common packages
 - name: gcr.io/cloud-builders/git
   id: Clone pxt-common-packages
   entrypoint: bash
-  args:
-    - -lc
-    - |
-      git clone "$_REPO_PKGS" pxt-common-packages
+  args: ["-lc", 'git clone "$_REPO_PKGS" pxt-common-packages']
 
-# 2) Prune everything to ESP32-S2 only (both repos)
+# 2) Prune to ESP32-S2 and fix light variants + disable sim
 - name: node:18
   id: Prune to ESP32-S2
   entrypoint: bash
   args:
     - -lc
     - |
+      set -euo pipefail
       chmod +x scripts/prune-for-esp32s2.sh
       ./scripts/prune-for-esp32s2.sh
 
-# 3) Install target deps without running scripts (fast, fewer postinstalls)
+      # Create required light variants inside the REAL libs dir
+      REAL_LIBS="$(readlink -f libs || echo libs)"
+      mkdir -p "$REAL_LIBS"
+      pushd "$REAL_LIBS" >/dev/null
+        [ -d base ] && { [ -e base---light ] || ln -s base base---light; }
+        # Add any other light variants your target expects:
+        # [ -d game ] && { [ -e game---light ] || ln -s game game---light; }
+      popd >/dev/null
+
+      # TEMP: skip building target sim until we clean dalboard.ts
+      rm -rf sim
+
+# 3) Install target deps without running scripts
 - name: node:18
   id: Install target deps (no scripts)
   entrypoint: bash
@@ -50,7 +57,7 @@ steps:
       npm config set audit false
       npm install --ignore-scripts
 
-# 4) Link local PXT repos and re-install (no scripts)
+# 4) Link local pxt repos + reinstall (no scripts)
 - name: node:18
   id: Link local pxt repos
   entrypoint: bash
@@ -62,7 +69,7 @@ steps:
       npx --yes pxt@0.5.1 link ./pxt-common-packages
       npm install --ignore-scripts
 
-# 5) Build static web (no hex caches because boards were removed)
+# 5) Build static package
 - name: node:18
   id: Build static package
   entrypoint: bash
@@ -70,16 +77,12 @@ steps:
     - -lc
     - |
       set -euo pipefail
-      # Debug: confirm libs symlink exists
-      ls -ld libs || true
-      # Purge conflicting Node types everywhere
-      rm -rf node_modules/@types/node \
-             pxt/node_modules/@types/node \
-             pxt-common-packages/node_modules/@types/node || true
-      # Build
+      echo "libs -> $(readlink -f libs || echo libs)"
+      # Remove Node typings that confuse TS
+      rm -rf node_modules/@types/node pxt/node_modules/@types/node pxt-common-packages/node_modules/@types/node || true
       npx --yes pxt@0.5.1 staticpkg
 
-# 6) Deploy to Firebase Hosting (default site)
+# 6) Deploy to Firebase Hosting
 - name: gcr.io/cloud-builders/gcloud
   id: Firebase deploy
   entrypoint: bash
