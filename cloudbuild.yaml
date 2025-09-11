@@ -62,7 +62,7 @@ steps:
       rm -f package-lock.json
       npm ci || npm install
 
-# 5) Prune for ESP32-S2 (springbot)
+# 5) Prune for ESP32-S2 (springbot) and link
 - name: node:18
   id: "Prune for ESP32-S2 (springbot)"
   entrypoint: bash
@@ -72,13 +72,12 @@ steps:
       set -euxo pipefail
       chmod +x scripts/prune-for-esp32s2.sh
       ./scripts/prune-for-esp32s2.sh
-      # Link pxt + common packages into node_modules so CLI finds local builds
       npm config set fund false
       npm config set audit false
       npx --yes pxt@0.5.1 link ./pxt
       npx --yes pxt@0.5.1 link ./pxt-common-packages
 
-# 6) Re-install root deps (after links)
+# 6) Re-install after linking
 - name: node:18
   id: "Link & build target"
   entrypoint: bash
@@ -89,7 +88,7 @@ steps:
       rm -rf node_modules package-lock.json
       npm ci || npm install
 
-# 7) Static pkg + Firebase deploy
+# 7) Static pkg + Firebase deploy (no $PUB in YAML)
 - name: node:18
   id: "Static pkg + Firebase deploy"
   entrypoint: bash
@@ -98,31 +97,31 @@ steps:
     - |
       set -euxo pipefail
 
-      # Build a static package (no unsupported flags)
+      # Build static package
       npx --yes pxt@0.5.1 staticpkg --noMini
 
-      # Detect public dir
+      # Detect output dir
       PUB=""
       for d in docs built/packaged pxt/built/web built/web; do
         if [ -d "$d" ]; then PUB="$d"; break; fi
       done
       if [ -z "$PUB" ]; then
-        echo "Could not find staticpkg output. Known dirs not present."
-        echo "Tree for debugging:"
+        echo "Could not find staticpkg output."
         find . -maxdepth 3 -type d | sed 's|^\./||'
         exit 1
       fi
-      echo "Using public dir: $PUB"
+      echo "Using public dir: ${PUB}"
 
-      # Write firebase config for this build
-      cat > firebase.json <<EOF
+      # Write firebase config with placeholder, then replace via sed
+      cat > firebase.json <<'EOF'
       {
         "hosting": {
-          "public": "$PUB",
+          "public": "__PUBLIC_DIR__",
           "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
         }
       }
       EOF
+      sed -i "s|__PUBLIC_DIR__|${PUB}|g" firebase.json
 
       cat > .firebaserc <<EOF
       {
@@ -132,12 +131,9 @@ steps:
       }
       EOF
 
-      # Install firebase-tools and deploy
       npm i -g firebase-tools
-      firebase --project ${_FIREBASE_PROJECT} hosting:sites:list || true
-      firebase deploy --only hosting --project ${_FIREBASE_PROJECT} --non-interactive
+      firebase deploy --only hosting --project "${_FIREBASE_PROJECT}" --non-interactive
 
-# (Optional) Artifacts – keep the built static site
 artifacts:
   objects:
     location: gs://$PROJECT_ID-build-artifacts/staticpkg/
