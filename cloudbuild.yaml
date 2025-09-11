@@ -1,113 +1,82 @@
-timeout: "3600s"
-
-substitutions:
-  _FIREBASE_PROJECT: "springbot-co-za"
-  _FIREBASE_SITE: "springbot-co-za"
-  _REPO_PXT: "https://github.com/domino4com/pxt.git"
-  _REPO_PKGS: "https://github.com/domino4com/pxt-common-packages.git"
+timeout: "1200s"  # 20 minutes
 
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
 
+substitutions:
+  _REPO_PXT: https://github.com/domino4com/pxt.git
+  _REPO_PKGS: https://github.com/domino4com/pxt-common-packages.git
+  _FIREBASE_PROJECT: springbot-co-za
+  _FIREBASE_SITE: springbot-co-za
+
 steps:
-  - id: "Clone pxt"
-    name: gcr.io/cloud-builders/git
-    entrypoint: bash
-    args: [ -lc, 'git clone "${_REPO_PXT}" pxt' ]
+# 0) Clone PXT
+- name: gcr.io/cloud-builders/git
+  id: Clone pxt
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      git clone "$_REPO_PXT" pxt
 
-  - id: "Clone pxt-common-packages"
-    name: gcr.io/cloud-builders/git
-    entrypoint: bash
-    args: [ -lc, 'git clone "${_REPO_PKGS}" pxt-common-packages' ]
+# 1) Clone common packages
+- name: gcr.io/cloud-builders/git
+  id: Clone pxt-common-packages
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      git clone "$_REPO_PKGS" pxt-common-packages
 
-  - id: "Prune to ESP32-S2"
-    name: node:18
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euxo pipefail
-        chmod +x scripts/prune-for-esp32s2.sh || true
-        ./scripts/prune-for-esp32s2.sh
-        rm -rf node_modules package-lock.json || true
-        rm -rf pxt/node_modules pxt-common-packages/node_modules || true
+# 2) Prune everything to ESP32-S2 only (both repos)
+- name: node:18
+  id: Prune to ESP32-S2
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      chmod +x scripts/prune-for-esp32s2.sh
+      ./scripts/prune-for-esp32s2.sh
 
-  - id: "Install target deps (no scripts)"
-    name: node:18
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euxo pipefail
-        npm config set fund false
-        npm config set audit false
-        npm install --ignore-scripts
+# 3) Install target deps without running scripts (fast, fewer postinstalls)
+- name: node:18
+  id: Install target deps (no scripts)
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      npm config set fund false
+      npm config set audit false
+      npm install --ignore-scripts
 
-  - id: "Link local pxt repos"
-    name: node:18
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euxo pipefail
-        # Remove installed copies so pxt can replace them with symlinks
-        rm -rf node_modules/pxt-core node_modules/pxt-common-packages || true
-        npx --yes pxt@0.5.1 link ./pxt
-        npx --yes pxt@0.5.1 link ./pxt-common-packages
-        # Re-run install to ensure deps resolve through the links
-        npm install --ignore-scripts
+# 4) Link local PXT repos and re-install (no scripts)
+- name: node:18
+  id: Link local pxt repos
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      rm -rf node_modules/pxt-core node_modules/pxt-common-packages || true
+      npx --yes pxt@0.5.1 link ./pxt
+      npx --yes pxt@0.5.1 link ./pxt-common-packages
+      npm install --ignore-scripts
 
-  - id: "Build static package"
-    name: node:18
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euxo pipefail
-        npx --yes pxt@0.5.1 staticpkg
+# 5) Build static web (no hex caches because boards were removed)
+- name: node:18
+  id: Build static package
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      npx --yes pxt@0.5.1 staticpkg
 
-        SRC=""
-        if [ -d "docs" ]; then
-          SRC="docs"
-        elif [ -d "built/packaged" ]; then
-          SRC="built/packaged"
-        elif [ -d "built/packaged/packaged" ]; then
-          SRC="built/packaged/packaged"
-        else
-          echo "Could not find staticpkg output. Checked: docs, built/packaged[/packaged]." >&2
-          exit 2
-        fi
-
-        rm -rf hosting
-        mkdir -p hosting
-        # Escape Cloud Build substitution so Bash expands SRC
-        cp -a "$${SRC}/." hosting/
-
-        cat > firebase.json <<'JSON'
-        {
-          "hosting": {
-            "public": "hosting",
-            "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
-          }
-        }
-        JSON
-
-        cat > .firebaserc <<JSON
-        {
-          "projects": { "default": "${_FIREBASE_PROJECT}" }
-        }
-        JSON
-
-  - id: "Deploy to Firebase Hosting"
-    name: gcr.io/firebase-public/firebase
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euxo pipefail
-        firebase hosting:sites:list --project "${_FIREBASE_PROJECT}" >/dev/null 2>&1 || true
-        firebase deploy \
-          --project "${_FIREBASE_PROJECT}" \
-          --only hosting \
-          --site "${_FIREBASE_SITE}"
+# 6) Deploy to Firebase Hosting (default site)
+- name: gcr.io/cloud-builders/gcloud
+  id: Firebase deploy
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      curl -sL https://firebase.tools | bash
+      firebase deploy --only hosting:$_FIREBASE_SITE --project $_FIREBASE_PROJECT --non-interactive
