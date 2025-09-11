@@ -62,11 +62,20 @@ steps:
       npx --yes pxt@0.5.1 link ./pxt-common-packages
       npm install --ignore-scripts
 
-# 5) Build static web (no hex caches now that non-ESP trees are gone)
+# 5) Build static web (after ensuring types are clean)
 - name: node:18
   id: Build static package
   entrypoint: bash
-  args: ['-lc', 'set -euo pipefail; npx --yes pxt@0.5.1 staticpkg']
+  args:
+    - -lc
+    - |
+      set -euo pipefail
+      # purge conflicting Node types everywhere
+      rm -rf node_modules/@types/node \
+             pxt/node_modules/@types/node \
+             pxt-common-packages/node_modules/@types/node || true
+      # build
+      npx --yes pxt@0.5.1 staticpkg
 
 # 6) Deploy to Firebase Hosting (default site)
 - name: gcr.io/cloud-builders/gcloud
