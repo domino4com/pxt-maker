@@ -1,6 +1,4 @@
-# cloudbuild.yaml — ESP32-S2 only, fast staticpkg + Firebase deploy
-
-timeout: "3600s"   # 60 minutes max (should finish well before this)
+timeout: "3600s"
 
 substitutions:
   _FIREBASE_PROJECT: "springbot-co-za"
@@ -13,25 +11,16 @@ options:
   machineType: E2_HIGHCPU_8
 
 steps:
-  # 0) Clone pxt
   - id: "Clone pxt"
     name: gcr.io/cloud-builders/git
     entrypoint: bash
-    args:
-      - -lc
-      - |
-        git clone "${_REPO_PXT}" pxt
+    args: [ -lc, 'git clone "${_REPO_PXT}" pxt' ]
 
-  # 1) Clone pxt-common-packages
   - id: "Clone pxt-common-packages"
     name: gcr.io/cloud-builders/git
     entrypoint: bash
-    args:
-      - -lc
-      - |
-        git clone "${_REPO_PKGS}" pxt-common-packages
+    args: [ -lc, 'git clone "${_REPO_PKGS}" pxt-common-packages' ]
 
-  # 2) Prune to ESP32-S2 only & prep workspace
   - id: "Prune to ESP32-S2"
     name: node:18
     entrypoint: bash
@@ -39,15 +28,11 @@ steps:
       - -lc
       - |
         set -euxo pipefail
-        # Prune libs to ESP32-S2
         chmod +x scripts/prune-for-esp32s2.sh || true
         ./scripts/prune-for-esp32s2.sh
-
-        # Make sure Node modules start clean at the root
         rm -rf node_modules package-lock.json || true
         rm -rf pxt/node_modules pxt-common-packages/node_modules || true
 
-  # 3) Install target deps WITHOUT running lifecycle scripts (no CRA subapps)
   - id: "Install target deps (no scripts)"
     name: node:18
     entrypoint: bash
@@ -57,10 +42,8 @@ steps:
         set -euxo pipefail
         npm config set fund false
         npm config set audit false
-        # Install deps for this target only; don't run prepare/postinstall from pxt-core subapps
         npm install --ignore-scripts
 
-  # 4) Link local pxt + pxt-common-packages
   - id: "Link local pxt repos"
     name: node:18
     entrypoint: bash
@@ -68,11 +51,9 @@ steps:
       - -lc
       - |
         set -euxo pipefail
-        # Use pxt CLI v0.5.1 and link local checkouts
         npx --yes pxt@0.5.1 link ./pxt
         npx --yes pxt@0.5.1 link ./pxt-common-packages
 
-  # 5) Build static package (no extra flags; v0.5.1 rejects --out/--noMini)
   - id: "Build static package"
     name: node:18
     entrypoint: bash
@@ -80,10 +61,8 @@ steps:
       - -lc
       - |
         set -euxo pipefail
-        # Build static site for the target
         npx --yes pxt@0.5.1 staticpkg
 
-        # Determine where staticpkg wrote files (varies by PXT version/target)
         SRC=""
         if [ -d "docs" ]; then
           SRC="docs"
@@ -96,12 +75,11 @@ steps:
           exit 2
         fi
 
-        # Prepare hosting directory
         rm -rf hosting
         mkdir -p hosting
-        cp -a "${SRC}/." hosting/
+        # IMPORTANT: escape Cloud Build substitution so Bash can expand it
+        cp -a "$${SRC}/." hosting/
 
-        # Create minimal Firebase Hosting config (targets the default site)
         cat > firebase.json <<'JSON'
         {
           "hosting": {
@@ -117,7 +95,6 @@ steps:
         }
         JSON
 
-  # 6) Deploy to Firebase Hosting (default site)
   - id: "Deploy to Firebase Hosting"
     name: gcr.io/firebase-public/firebase
     entrypoint: bash
@@ -125,12 +102,7 @@ steps:
       - -lc
       - |
         set -euxo pipefail
-        # Ensure the site exists and is the one we want to deploy to.
-        # (No-op if it already exists.)
         firebase hosting:sites:list --project "${_FIREBASE_PROJECT}" >/dev/null 2>&1 || true
-
-        # Deploy using firebase.json (public=hosting) to the default project.
-        # Since firebase.json doesn't specify 'site', we pass --site to pin it.
         firebase deploy \
           --project "${_FIREBASE_PROJECT}" \
           --only hosting \
