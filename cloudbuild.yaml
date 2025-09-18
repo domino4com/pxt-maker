@@ -26,22 +26,14 @@ steps:
     id: Clone pxt
     waitFor: ["-"]
     entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euo pipefail
-        git clone "$_REPO_PXT" pxt
+    args: ["-lc", "set -euo pipefail; git clone \"$_REPO_PXT\" pxt"]
 
   # 1) Clone common packages (parallel)
   - name: gcr.io/cloud-builders/git
     id: Clone pxt-common-packages
     waitFor: ["-"]
     entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euo pipefail
-        git clone "$_REPO_PKGS" pxt-common-packages
+    args: ["-lc", "set -euo pipefail; git clone \"$_REPO_PKGS\" pxt-common-packages"]
 
   # 2) Prune to ESP32-S2 (depends on both clones)
   - name: node:18
@@ -55,7 +47,7 @@ steps:
         chmod +x scripts/prune-for-esp32s2.sh
         ./scripts/prune-for-esp32s2.sh
 
-  # 2.5) Pin target to ESP32-S2 only (pure Node; no shell $vars for Cloud Build to misread)
+  # 2.5) Pin target to ESP32-S2 only (NOW scans node_modules/*/pxttarget.json first)
   - name: node:18
     id: Pin target to ESP32-S2 only
     waitFor: ["Prune to ESP32-S2"]
@@ -69,32 +61,39 @@ steps:
         const path = require('path');
 
         function exists(p) { try { fs.accessSync(p); return true; } catch { return false; } }
-        function firstExisting(candidates) {
-          for (const c of candidates) {
-            if (c.includes('*')) {
-              const [dir, file] = c.split('/*/');
-              if (exists(dir)) {
-                for (const sub of fs.readdirSync(dir, { withFileTypes: true })) {
-                  if (sub.isDirectory()) {
-                    const cand = path.join(dir, sub.name, file);
-                    if (exists(cand)) return cand;
-                  }
-                }
-              }
-            } else if (exists(c)) return c;
+        function glob1(dir, filename) {
+          if (!exists(dir)) return null;
+          for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (ent.isDirectory()) {
+              const cand = path.join(dir, ent.name, filename);
+              if (exists(cand)) return cand;
+            }
           }
           return null;
         }
+        function firstExisting() {
+          // Look in node_modules first (this is where Maker target usually lives)
+          const nm = glob1('node_modules', 'pxttarget.json');
+          if (nm) return nm;
+          // Then the workspace
+          if (exists('pxttarget.json')) return 'pxttarget.json';
+          const targetsDir = 'targets';
+          if (exists(targetsDir)) {
+            for (const ent of fs.readdirSync(targetsDir, { withFileTypes: true })) {
+              if (ent.isDirectory()) {
+                const cand = path.join(targetsDir, ent.name, 'pxttarget.json');
+                if (exists(cand)) return cand;
+              }
+            }
+          }
+          // And finally the cloned pxt repo (rare)
+          if (exists('pxt/pxttarget.json')) return 'pxt/pxttarget.json';
+          return null;
+        }
 
-        const candidates = [
-          'pxttarget.json',
-          'targets/*/pxttarget.json',
-          'pxt/pxttarget.json'
-        ];
-
-        const found = firstExisting(candidates);
+        const found = firstExisting();
         if (!found) {
-          console.log('No pxttarget.json found; skipping variant pin.');
+          console.log('No pxttarget.json found anywhere; skipping variant pin.');
           process.exit(0);
         }
 
@@ -107,7 +106,6 @@ steps:
         setOnly(j, 'platforms');
         setOnly(j, 'hardwareVariants');
         if (j.sim && j.sim.hardwareVariants) j.sim.hardwareVariants = only;
-
         fs.writeFileSync(found, JSON.stringify(j, null, 2));
         console.log('Result:\n' + fs.readFileSync(found, 'utf8'));
         NODE
@@ -150,6 +148,8 @@ steps:
       - -lc
       - |
         set -euo pipefail
+        echo "Resolved target file (if any):"
+        ls -1 node_modules/*/pxttarget.json 2>/dev/null || true
         # Limit to avoid rare hangs
         timeout 15m npx --yes pxt@0.5.1 staticpkg
 
