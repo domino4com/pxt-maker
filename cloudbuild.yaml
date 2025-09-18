@@ -32,7 +32,7 @@ steps:
     entrypoint: bash
     args: ["-lc", "set -euo pipefail; git clone \"$_REPO_PKGS\" pxt-common-packages"]
 
-  # Prune to ESP32-S2 only (your script lives in repo root)
+  # Prune to ESP32-S2 only
   - name: node:18
     id: Prune to ESP32-S2
     waitFor: ["Clone pxt", "Clone pxt-common-packages"]
@@ -44,7 +44,7 @@ steps:
         chmod +x scripts/prune-for-esp32s2.sh
         ./scripts/prune-for-esp32s2.sh
 
-  # Pin target to ESP32-S2 (avoid ${...} in Node by not using template strings)
+  # Pin target variants to esp32s2 (no ${...} in Node)
   - name: node:18
     id: Pin target to ESP32-S2 only
     waitFor: ["Prune to ESP32-S2"]
@@ -60,7 +60,6 @@ steps:
         const candidates=[]
           .concat(['pxttarget.json','pxt/pxttarget.json'])
           .concat(list('targets').map(x=>'targets/'+x+'/pxttarget.json'))
-          .concat(list('node_modules').map(x=>'node_modules/'+x+'/pxttarget.json'))
           .filter(exists);
         if(!candidates.length){ console.log('No pxttarget.json found; skipping variant pin.'); process.exit(0); }
         const p=candidates[0];
@@ -73,7 +72,7 @@ steps:
         fs.writeFileSync(p, JSON.stringify(j,null,2));
         NODE
 
-  # Install deps without running scripts; remove @types/node that can upset PXT
+  # Install deps (fall back to npm install) and purge @types/node
   - name: node:18
     id: Install deps (no scripts) + purge node types
     waitFor: ["Pin target to ESP32-S2 only"]
@@ -100,9 +99,9 @@ steps:
         ln -s /workspace/pxt-common-packages/libs ./libs
         [ -d libs/base---light ] || cp -a libs/base libs/base---light
 
-  # Create shims for ---stm32 and ---vm in BOTH ./libs and ./pxt-common-packages/libs
+  # Shim only ---stm32 transforms to ESP32 variants
   - name: node:18
-    id: Shim stm32 & vm transforms (both trees)
+    id: Shim stm32 transforms
     waitFor: ["Stage libs"]
     entrypoint: bash
     args:
@@ -126,46 +125,76 @@ steps:
           make_link_if_missing () {
             dest="$1"; target="$2"
             [ -z "$target" ] && return 0
-            if [ ! -e "$dest" ]; then ln -s "$target" "$dest"; echo "[$dir] shim: $dest -> $target"; fi
+            if [ ! -e "$dest" ]; then ln -s "$target" "$dest"; echo "shim: $dest -> $target"; fi
           }
 
           for lib in core settings screen serial power display; do
             tgt="$(pick_target "$lib")"
             make_link_if_missing "$lib---stm32" "$tgt"
-            make_link_if_missing "$lib---vm"    "$tgt"
           done
 
           cd - >/dev/null
         }
 
-        shim_dir "/workspace/libs"
         shim_dir "/workspace/pxt-common-packages/libs"
+        shim_dir "/workspace/libs"
 
-  # Disable simulator to avoid sim TS errors
+  # Stub any missing ---vm transforms with minimal pxt.json (neutral no-op)
   - name: node:18
-    id: Disable sim
-    waitFor: ["Shim stm32 & vm transforms (both trees)"]
+    id: Stub vm transforms
+    waitFor: ["Shim stm32 transforms"]
     entrypoint: bash
     args:
       - -lc
       - |
         set -euo pipefail
-        rm -rf /workspace/sim || true
-        # some targets also check this
-        echo "PXT_NOSIM=1" >> $HOME/.bashrc
+        make_stub_vm () {
+          base="$1"
+          [ -d "$base" ] || return 0
+          cd "$base"
+          for lib in core settings screen serial power display; do
+            d="$lib---vm"
+            if [ ! -e "$d" ]; then
+              mkdir -p "$d"
+              cat > "$d/pxt.json" <<'JSON'
+{
+  "name": "PLACEHOLDER",
+  "version": "0.0.0",
+  "description": "Auto-stub for VM transform; intentionally empty for ESP32-S2.",
+  "files": []
+}
+JSON
+              # replace placeholder with actual name
+              sed -i "s/PLACEHOLDER/$d/g" "$d/pxt.json"
+              echo "stub: $base/$d"
+            fi
+          done
+          cd - >/dev/null
+        }
+        make_stub_vm "/workspace/pxt-common-packages/libs"
+        make_stub_vm "/workspace/libs"
 
-  # Build static package
+  # Remove simulator to avoid TS errors; also set PXT_NOSIM via env on the build step
+  - name: node:18
+    id: Disable sim
+    waitFor: ["Stub vm transforms"]
+    entrypoint: bash
+    args: ["-lc", "set -euo pipefail; rm -rf /workspace/sim || true"]
+
+  # Build static package (no sim)
   - name: node:18
     id: Build static package
     waitFor: ["Disable sim"]
     entrypoint: bash
+    env:
+      - PXT_NOSIM=1
     args:
       - -lc
       - |
         set -euo pipefail
-        echo "Resolved target file (if any):"
+        echo "Resolved target file(s):"
         ls -1 node_modules/*/pxttarget.json 2>/dev/null || true
-        PXT_NOSIM=1 timeout 15m npx --yes pxt@0.5.1 staticpkg
+        timeout 15m npx --yes pxt@0.5.1 staticpkg
 
   # Firebase deploy via IAM (default)
   - name: gcr.io/cloud-builders/gcloud
