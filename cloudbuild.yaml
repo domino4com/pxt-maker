@@ -21,7 +21,7 @@ substitutions:
 
 # ---------------------------------
 # Make FIREBASE_TOKEN available (but
-# we only inject it in the token step)
+# only injected into the token step)
 # ---------------------------------
 availableSecrets:
   secretManager:
@@ -38,7 +38,7 @@ steps:
       - -lc
       - |
         set -Eeuo pipefail
-        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        trap 's=$?; echo "Error on line $$LINENO: $(fc -ln -1)" >&2; exit $s' ERR
         retry() { local t=$1; shift; local sl=$1; shift; local n=0; until "$@"; do n=$((n+1)); [ "$n" -ge "$t" ] && { echo "Failed: $*"; return 1; }; echo "Retry $n/$t: $*"; sleep "$sl"; done; }
         retry 3 3 git clone "$_REPO_PXT" pxt
 
@@ -51,7 +51,7 @@ steps:
       - -lc
       - |
         set -Eeuo pipefail
-        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        trap 's=$?; echo "Error on line $$LINENO: $(fc -ln -1)" >&2; exit $s' ERR
         retry() { local t=$1; shift; local sl=$1; shift; local n=0; until "$@"; do n=$((n+1)); [ "$n" -ge "$t" ] && { echo "Failed: $*"; return 1; }; echo "Retry $n/$t: $*"; sleep "$sl"; done; }
         retry 3 3 git clone "$_REPO_PKGS" pxt-common-packages
 
@@ -64,7 +64,7 @@ steps:
       - -lc
       - |
         set -Eeuo pipefail
-        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        trap 's=$?; echo "Error on line $$LINENO: $(fc -ln -1)" >&2; exit $s' ERR
         chmod +x scripts/prune-for-esp32s2.sh
         ./scripts/prune-for-esp32s2.sh
 
@@ -77,7 +77,7 @@ steps:
       - -lc
       - |
         set -Eeuo pipefail
-        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        trap 's=$?; echo "Error on line $$LINENO: $(fc -ln -1)" >&2; exit $s' ERR
         CANDIDATES=( "pxttarget.json" "targets/*/pxttarget.json" "pxt/pxttarget.json" )
         FOUND=""
         for c in "${CANDIDATES[@]}"; do
@@ -113,7 +113,7 @@ steps:
       - -lc
       - |
         set -Eeuo pipefail
-        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        trap 's=$?; echo "Error on line $$LINENO: $(fc -ln -1)" >&2; exit $s' ERR
         npm config set fund false
         npm config set audit false
         retry() { local t=$1; shift; local sl=$1; shift; local n=0; until "$@"; do n=$((n+1)); [ "$n" -ge "$t" ] && { echo "Failed: $*"; return 1; }; echo "Retry $n/$t: $*"; sleep "$sl"; done; }
@@ -133,7 +133,7 @@ steps:
       - -lc
       - |
         set -Eeuo pipefail
-        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        trap 's=$?; echo "Error on line $$LINENO: $(fc -ln -1)" >&2; exit $s' ERR
         rm -rf libs
         ln -s /workspace/pxt-common-packages/libs ./libs
         [ -d libs/base---light ] || cp -a libs/base libs/base---light
@@ -147,7 +147,7 @@ steps:
       - -lc
       - |
         set -Eeuo pipefail
-        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        trap 's=$?; echo "Error on line $$LINENO: $(fc -ln -1)" >&2; exit $s' ERR
         # Guard long builds from hanging forever
         timeout 15m npx --yes pxt@0.5.1 staticpkg
 
@@ -160,7 +160,7 @@ steps:
       - -lc
       - |
         set -Eeuo pipefail
-        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        trap 's=$?; echo "Error on line $$LINENO: $(fc -ln -1)" >&2; exit $s' ERR
         if [ "${_USE_FIREBASE_TOKEN}" = "true" ]; then
           echo "Skipping IAM deploy because _USE_FIREBASE_TOKEN=true"
           exit 0
@@ -182,16 +182,16 @@ steps:
       - -lc
       - |
         set -Eeuo pipefail
-        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        trap 's=$?; echo "Error on line $$LINENO: $(fc -ln -1)" >&2; exit $s' ERR
         if [ "${_USE_FIREBASE_TOKEN}" != "true" ]; then
           echo "Skipping token deploy because _USE_FIREBASE_TOKEN!=true"
           exit 0
         fi
-        : "${FIREBASE_TOKEN:?FIREBASE_TOKEN secret not provided}"
+        : "$${FIREBASE_TOKEN:?FIREBASE_TOKEN secret not provided}"
         curl -sL https://firebase.tools | bash
         # Do NOT echo the token
         firebase deploy \
           --only "hosting:${_FIREBASE_SITE}" \
           --project "${_FIREBASE_PROJECT}" \
           --non-interactive \
-          --token "$FIREBASE_TOKEN"
+          --token "$$FIREBASE_TOKEN"
