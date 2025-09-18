@@ -12,7 +12,6 @@ substitutions:
   _FIREBASE_SITE: springbot-co-za
   # "false" => use IAM (service account perms). "true" => use FIREBASE_TOKEN secret.
   _USE_FIREBASE_TOKEN: "false"
-  # Secret Manager version to use when _USE_FIREBASE_TOKEN="true"
   _FIREBASE_TOKEN_SECRET: projects/springbot-co-za/secrets/FIREBASE_TOKEN/versions/latest
 
 availableSecrets:
@@ -47,7 +46,7 @@ steps:
         chmod +x scripts/prune-for-esp32s2.sh
         ./scripts/prune-for-esp32s2.sh
 
-  # 2.5) Pin target to ESP32-S2 only (NOW scans node_modules/*/pxttarget.json first)
+  # 2.5) Try to pin target to ESP32-S2 only (best-effort)
   - name: node:18
     id: Pin target to ESP32-S2 only
     waitFor: ["Prune to ESP32-S2"]
@@ -72,42 +71,35 @@ steps:
           return null;
         }
         function firstExisting() {
-          // Look in node_modules first (this is where Maker target usually lives)
-          const nm = glob1('node_modules', 'pxttarget.json');
-          if (nm) return nm;
-          // Then the workspace
+          const nm = glob1('node_modules', 'pxttarget.json'); if (nm) return nm;
           if (exists('pxttarget.json')) return 'pxttarget.json';
-          const targetsDir = 'targets';
-          if (exists(targetsDir)) {
-            for (const ent of fs.readdirSync(targetsDir, { withFileTypes: true })) {
+          const td = 'targets';
+          if (exists(td)) {
+            for (const ent of fs.readdirSync(td, { withFileTypes: true })) {
               if (ent.isDirectory()) {
-                const cand = path.join(targetsDir, ent.name, 'pxttarget.json');
+                const cand = path.join(td, ent.name, 'pxttarget.json');
                 if (exists(cand)) return cand;
               }
             }
           }
-          // And finally the cloned pxt repo (rare)
           if (exists('pxt/pxttarget.json')) return 'pxt/pxttarget.json';
           return null;
         }
 
         const found = firstExisting();
-        if (!found) {
-          console.log('No pxttarget.json found anywhere; skipping variant pin.');
-          process.exit(0);
-        }
+        if (!found) { console.log('No pxttarget.json found; skipping variant pin.'); process.exit(0); }
 
         console.log(`Pinning variants in ${found} to ["esp32s2"]`);
         const j = JSON.parse(fs.readFileSync(found, 'utf8'));
         const only = ['esp32s2'];
-        const setOnly = (o, k) => { if (o && Object.prototype.hasOwnProperty.call(o, k)) o[k] = only; };
-        setOnly(j, 'variants');
-        setOnly(j, 'compileServiceVariants');
-        setOnly(j, 'platforms');
-        setOnly(j, 'hardwareVariants');
+        const setOnly = (o,k)=>{ if (o && Object.prototype.hasOwnProperty.call(o,k)) o[k]=only; };
+        setOnly(j,'variants');
+        setOnly(j,'compileServiceVariants');
+        setOnly(j,'platforms');
+        setOnly(j,'hardwareVariants');
         if (j.sim && j.sim.hardwareVariants) j.sim.hardwareVariants = only;
         fs.writeFileSync(found, JSON.stringify(j, null, 2));
-        console.log('Result:\n' + fs.readFileSync(found, 'utf8'));
+        console.log('Result:\n' + fs.readFileSync(found,'utf8'));
         NODE
 
   # 3) Install deps (no scripts) + purge Node types (depends on pin)
@@ -139,10 +131,9 @@ steps:
         ln -s /workspace/pxt-common-packages/libs ./libs
         [ -d libs/base---light ] || cp -a libs/base libs/base---light
 
-
-  # 4.5) Shim STM32 transforms to ESP32(S2) to stop PXT from chdir'ing to non-existent libs
+  # 4.5) Shim STM32 and VM transforms to ESP32/ESP32S2 (depends on stage)
   - name: node:18
-    id: Shim stm32 transforms
+    id: Shim stm32 & vm transforms
     waitFor: ["Stage libs"]
     entrypoint: bash
     args:
@@ -150,28 +141,51 @@ steps:
       - |
         set -euo pipefail
         cd /workspace/libs
-        # Prefer esp32s2 fallbacks; if not available, fall back to esp32; else to base lib
-        link_fallback() {
+
+        pick_target() {
+          # $1 = base lib name (e.g., core, settings)
           local name="$1"
-          local target=""
-          if [ -d "${name}---esp32s2" ]; then target="${name}---esp32s2";
-          elif [ -d "${name}---esp32" ]; then target="${name}---esp32";
-          elif [ -d "${name}" ]; then target="${name}";
-          else return 0; fi
-          if [ ! -e "${name}---stm32" ]; then
-            ln -s "${target}" "${name}---stm32"
-            echo "shim: ${name}---stm32 -> ${target}"
+          if   [ -d "${name}---esp32s2" ]; then echo "${name}---esp32s2"
+          elif [ -d "${name}---esp32"   ]; then echo "${name}---esp32"
+          elif [ -d "${name}"           ]; then echo "${name}"
+          else echo ""; fi
+        }
+
+        make_link_if_missing() {
+          # $1 = link name (dest), $2 = target (source)
+          local dest="$1" target="$2"
+          [ -z "$target" ] && return 0
+          if [ ! -e "$dest" ]; then
+            ln -s "$target" "$dest"
+            echo "shim: $dest -> $target"
           fi
         }
-        # Common libs PXT tries to variant-map; extend if errors mention others
-        for lib in core settings screen serial power display; do
-          link_fallback "$lib"
-        done      
 
-  # 5) Build static package (depends on stage)
+        # Common libs that show up in transforms
+        for lib in core settings screen serial power display; do
+          tgt="$(pick_target "$lib")"
+          make_link_if_missing "${lib}---stm32" "$tgt"
+          make_link_if_missing "${lib}---vm"    "$tgt"
+        done
+
+        # If anything else asks for ---stm32 or ---vm later, we can add it to the loop above.
+
+  # 4.7) Hard-disable simulator compilation (depends on shim)
+  - name: node:18
+    id: Disable sim
+    waitFor: ["Shim stm32 & vm transforms"]
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        # Remove local sim sources so pxt can't try to compile them
+        rm -rf /workspace/sim || true
+
+  # 5) Build static package (depends on sim disable)
   - name: node:18
     id: Build static package
-    waitFor: ["Stage libs"]
+    waitFor: ["Disable sim"]
     entrypoint: bash
     args:
       - -lc
@@ -179,7 +193,7 @@ steps:
         set -euo pipefail
         echo "Resolved target file (if any):"
         ls -1 node_modules/*/pxttarget.json 2>/dev/null || true
-        # Limit to avoid rare hangs
+        # Disable sim, cap runtime to avoid hangs
         PXT_NOSIM=1 timeout 15m npx --yes pxt@0.5.1 staticpkg
 
   # 6a) Deploy via IAM (default; skips if _USE_FIREBASE_TOKEN="true")
