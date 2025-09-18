@@ -4,58 +4,81 @@ options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
 
+# -----------------------------
+# Substitutions (tweak as needed)
+# -----------------------------
 substitutions:
   _REPO_PXT: https://github.com/domino4com/pxt.git
   _REPO_PKGS: https://github.com/domino4com/pxt-common-packages.git
   _FIREBASE_PROJECT: springbot-co-za
   _FIREBASE_SITE: springbot-co-za
+  # Toggle which deploy path to use:
+  #   "false" => use IAM (recommended; service account needs Firebase Hosting perms)
+  #   "true"  => use FIREBASE_TOKEN secret (configure secret below)
+  _USE_FIREBASE_TOKEN: "false"
+  # Fully-qualified Secret Manager version for FIREBASE_TOKEN (used only when _USE_FIREBASE_TOKEN="true")
+  _FIREBASE_TOKEN_SECRET: projects/springbot-co-za/secrets/FIREBASE_TOKEN/versions/latest
+
+# ---------------------------------
+# Make FIREBASE_TOKEN available (but
+# we only inject it in the token step)
+# ---------------------------------
+availableSecrets:
+  secretManager:
+    - versionName: ${_FIREBASE_TOKEN_SECRET}
+      env: FIREBASE_TOKEN
 
 steps:
-  # 0) Clone PXT
+  # 0) Clone PXT (parallel)
   - name: gcr.io/cloud-builders/git
     id: Clone pxt
+    waitFor: ["-"]
     entrypoint: bash
     args:
       - -lc
       - |
-        set -e
-        git clone "$_REPO_PXT" pxt
+        set -Eeuo pipefail
+        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        retry() { local t=$1; shift; local sl=$1; shift; local n=0; until "$@"; do n=$((n+1)); [ "$n" -ge "$t" ] && { echo "Failed: $*"; return 1; }; echo "Retry $n/$t: $*"; sleep "$sl"; done; }
+        retry 3 3 git clone "$_REPO_PXT" pxt
 
-  # 1) Clone common packages
+  # 1) Clone common packages (parallel)
   - name: gcr.io/cloud-builders/git
     id: Clone pxt-common-packages
+    waitFor: ["-"]
     entrypoint: bash
     args:
       - -lc
       - |
-        set -e
-        git clone "$_REPO_PKGS" pxt-common-packages
+        set -Eeuo pipefail
+        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        retry() { local t=$1; shift; local sl=$1; shift; local n=0; until "$@"; do n=$((n+1)); [ "$n" -ge "$t" ] && { echo "Failed: $*"; return 1; }; echo "Retry $n/$t: $*"; sleep "$sl"; done; }
+        retry 3 3 git clone "$_REPO_PKGS" pxt-common-packages
 
-  # 2) Prune everything to ESP32-S2 only (both repos)
+  # 2) Prune to ESP32-S2 (depends on both clones)
   - name: node:18
     id: Prune to ESP32-S2
+    waitFor: ["Clone pxt", "Clone pxt-common-packages"]
     entrypoint: bash
     args:
       - -lc
       - |
-        set -e
+        set -Eeuo pipefail
+        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
         chmod +x scripts/prune-for-esp32s2.sh
         ./scripts/prune-for-esp32s2.sh
 
-  # 2.5) Force target to ESP32-S2 only by rewriting pxttarget.json if present
+  # 2.5) Pin target to ESP32-S2 only (depends on prune)
   - name: node:18
     id: Pin target to ESP32-S2 only
+    waitFor: ["Prune to ESP32-S2"]
     entrypoint: bash
     args:
       - -lc
       - |
-        set -e
-        # Look for pxttarget.json in common locations
-        CANDIDATES=(
-          "pxttarget.json"
-          "targets/*/pxttarget.json"
-          "pxt/pxttarget.json"
-        )
+        set -Eeuo pipefail
+        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        CANDIDATES=( "pxttarget.json" "targets/*/pxttarget.json" "pxt/pxttarget.json" )
         FOUND=""
         for c in "${CANDIDATES[@]}"; do
           for f in $c; do
@@ -76,59 +99,99 @@ steps:
             if (j.sim && j.sim.hardwareVariants) j.sim.hardwareVariants=only;
             fs.writeFileSync(p, JSON.stringify(j,null,2));
           ' "$FOUND"
-          echo "Result:"
-          cat "$FOUND"
+          echo "Result:"; cat "$FOUND"
         else
           echo "No pxttarget.json found; skipping variant pin."
         fi
 
-  # 3) Install deps without running scripts, then purge Node types everywhere
+  # 3) Install deps (no scripts) + purge Node types (depends on pin)
   - name: node:18
     id: Install deps (no scripts) + purge node types
+    waitFor: ["Pin target to ESP32-S2 only"]
     entrypoint: bash
     args:
       - -lc
       - |
-        set -e
+        set -Eeuo pipefail
+        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
         npm config set fund false
         npm config set audit false
-        # Prefer clean, fall back to install if lockfile is out-of-sync
-        (npm ci --ignore-scripts || npm install --ignore-scripts)
+        retry() { local t=$1; shift; local sl=$1; shift; local n=0; until "$@"; do n=$((n+1)); [ "$n" -ge "$t" ] && { echo "Failed: $*"; return 1; }; echo "Retry $n/$t: $*"; sleep "$sl"; done; }
+        # Prefer clean; fall back to install if lockfile mismatch
+        retry 3 5 bash -lc 'npm ci --ignore-scripts || npm install --ignore-scripts'
         # Remove troublesome @types/node that causes TS parse errors in PXT
         rm -rf node_modules/@types/node \
                pxt/node_modules/@types/node \
                pxt-common-packages/node_modules/@types/node || true
 
-  # 4) Stage libs: point ./libs at pxt-common-packages/libs and ensure base---light exists
+  # 4) Stage libs (depends on install)
   - name: node:18
     id: Stage libs
+    waitFor: ["Install deps (no scripts) + purge node types"]
     entrypoint: bash
     args:
       - -lc
       - |
-        set -e
+        set -Eeuo pipefail
+        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
         rm -rf libs
         ln -s /workspace/pxt-common-packages/libs ./libs
-        # Some PXT transforms expect base---light; create it if absent
         [ -d libs/base---light ] || cp -a libs/base libs/base---light
 
-  # 5) Build static web (no firmware hex caches; we pruned other boards)
+  # 5) Build static package (depends on stage)
   - name: node:18
     id: Build static package
+    waitFor: ["Stage libs"]
     entrypoint: bash
     args:
       - -lc
       - |
-        set -e
-        npx --yes pxt@0.5.1 staticpkg
+        set -Eeuo pipefail
+        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        # Guard long builds from hanging forever
+        timeout 15m npx --yes pxt@0.5.1 staticpkg
 
-  # 6) Deploy to Firebase Hosting (default site)
+  # 6a) Deploy via IAM (default; skips if _USE_FIREBASE_TOKEN="true")
   - name: gcr.io/cloud-builders/gcloud
-    id: Firebase deploy
+    id: Firebase deploy (IAM)
+    waitFor: ["Build static package"]
     entrypoint: bash
     args:
       - -lc
       - |
-        set -e
+        set -Eeuo pipefail
+        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        if [ "${_USE_FIREBASE_TOKEN}" = "true" ]; then
+          echo "Skipping IAM deploy because _USE_FIREBASE_TOKEN=true"
+          exit 0
+        fi
         curl -sL https://firebase.tools | bash
-        firebase deploy --only hosting:$_FIREBASE_SITE --project $_FIREBASE_PROJECT --non-interactive
+        firebase deploy \
+          --only "hosting:${_FIREBASE_SITE}" \
+          --project "${_FIREBASE_PROJECT}" \
+          --non-interactive
+
+  # 6b) Deploy via FIREBASE_TOKEN secret (runs but no-ops unless _USE_FIREBASE_TOKEN="true")
+  - name: gcr.io/cloud-builders/gcloud
+    id: Firebase deploy (token)
+    waitFor: ["Build static package"]
+    entrypoint: bash
+    # Only this step gets the secret injected as env when used
+    secretEnv: ["FIREBASE_TOKEN"]
+    args:
+      - -lc
+      - |
+        set -Eeuo pipefail
+        trap 's=$?; echo "Error on line $LINENO: $(fc -ln -1)" >&2; exit $s' ERR
+        if [ "${_USE_FIREBASE_TOKEN}" != "true" ]; then
+          echo "Skipping token deploy because _USE_FIREBASE_TOKEN!=true"
+          exit 0
+        fi
+        : "${FIREBASE_TOKEN:?FIREBASE_TOKEN secret not provided}"
+        curl -sL https://firebase.tools | bash
+        # Do NOT echo the token
+        firebase deploy \
+          --only "hosting:${_FIREBASE_SITE}" \
+          --project "${_FIREBASE_PROJECT}" \
+          --non-interactive \
+          --token "$FIREBASE_TOKEN"
