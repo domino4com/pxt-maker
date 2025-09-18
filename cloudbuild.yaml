@@ -139,6 +139,35 @@ steps:
         ln -s /workspace/pxt-common-packages/libs ./libs
         [ -d libs/base---light ] || cp -a libs/base libs/base---light
 
+
+  # 4.5) Shim STM32 transforms to ESP32(S2) to stop PXT from chdir'ing to non-existent libs
+  - name: node:18
+    id: Shim stm32 transforms
+    waitFor: ["Stage libs"]
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        cd /workspace/libs
+        # Prefer esp32s2 fallbacks; if not available, fall back to esp32; else to base lib
+        link_fallback() {
+          local name="$1"
+          local target=""
+          if [ -d "${name}---esp32s2" ]; then target="${name}---esp32s2";
+          elif [ -d "${name}---esp32" ]; then target="${name}---esp32";
+          elif [ -d "${name}" ]; then target="${name}";
+          else return 0; fi
+          if [ ! -e "${name}---stm32" ]; then
+            ln -s "${target}" "${name}---stm32"
+            echo "shim: ${name}---stm32 -> ${target}"
+          fi
+        }
+        # Common libs PXT tries to variant-map; extend if errors mention others
+        for lib in core settings screen serial power display; do
+          link_fallback "$lib"
+        done      
+
   # 5) Build static package (depends on stage)
   - name: node:18
     id: Build static package
