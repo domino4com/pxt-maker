@@ -180,7 +180,7 @@ steps:
         echo "Resolved target file (if any):"
         ls -1 node_modules/*/pxttarget.json 2>/dev/null || true
         # Limit to avoid rare hangs
-        timeout 15m npx --yes pxt@0.5.1 staticpkg
+        PXT_NOSIM=1 timeout 15m npx --yes pxt@0.5.1 staticpkg
 
   # 6a) Deploy via IAM (default; skips if _USE_FIREBASE_TOKEN="true")
   - name: gcr.io/cloud-builders/gcloud
