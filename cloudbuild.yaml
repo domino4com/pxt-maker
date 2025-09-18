@@ -3,25 +3,19 @@ timeout: "1200s"
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
-  substitutionOption: ALLOW_LOOSE
 
+# Only custom substitutions (all start with underscore). No ${…}, no $UPPERCASE templates.
 substitutions:
   _REPO_PXT: https://github.com/domino4com/pxt.git
   _REPO_PKGS: https://github.com/domino4com/pxt-common-packages.git
   _FIREBASE_PROJECT: springbot-co-za
   _FIREBASE_SITE: springbot-co-za
-  _USE_FIREBASE_TOKEN: "false"
-  _FIREBASE_TOKEN_SECRET: projects/springbot-co-za/secrets/FIREBASE_TOKEN/versions/latest
-
-availableSecrets:
-  secretManager:
-    - versionName: ${_FIREBASE_TOKEN_SECRET}
-      env: FIREBASE_TOKEN
+  _USE_FIREBASE_TOKEN: "false"   # set to "true" if you’ll pass FIREBASE_TOKEN at runtime
 
 steps:
+  # 0) Clone PXT
   - name: gcr.io/cloud-builders/git
     id: "Clone pxt"
-    waitFor: ["-"]
     entrypoint: bash
     args:
       - -lc
@@ -29,9 +23,9 @@ steps:
         set -euo pipefail
         git clone "$_REPO_PXT" pxt
 
+  # 1) Clone common packages
   - name: gcr.io/cloud-builders/git
     id: "Clone pxt-common-packages"
-    waitFor: ["-"]
     entrypoint: bash
     args:
       - -lc
@@ -39,9 +33,9 @@ steps:
         set -euo pipefail
         git clone "$_REPO_PKGS" pxt-common-packages
 
+  # 2) Prune everything to ESP32-S2 only (both repos)
   - name: node:18
     id: "Prune to ESP32-S2"
-    waitFor: ["Clone pxt", "Clone pxt-common-packages"]
     entrypoint: bash
     args:
       - -lc
@@ -50,36 +44,37 @@ steps:
         chmod +x scripts/prune-for-esp32s2.sh
         ./scripts/prune-for-esp32s2.sh
 
+  # 3) Force target to ESP32-S2 only if pxttarget.json exists
   - name: node:18
     id: "Pin target to ESP32-S2 only"
-    waitFor: ["Prune to ESP32-S2"]
     entrypoint: bash
     args:
       - -lc
       - |
         set -euo pipefail
-        node - <<'NODE'
-        const fs=require('fs');
-        const exists=p=>{try{fs.accessSync(p);return true;}catch{return false;}};
-        const list=d=>exists(d)?fs.readdirSync(d).map(x=>d+'/'+x):[];
-        const candidates=[]
-          .concat(['pxttarget.json','pxt/pxttarget.json'])
-          .concat(list('targets').map(x=>'targets/'+x+'/pxttarget.json'))
-          .filter(exists);
-        if(!candidates.length){ console.log('No pxttarget.json found; skipping variant pin.'); process.exit(0); }
-        const p=candidates[0];
-        console.log('Pinning variants in '+p+' to ["esp32s2"]');
-        const j=JSON.parse(fs.readFileSync(p,'utf8'));
-        const only=['esp32s2'];
-        const setOnly=(o,k)=>{ if(o && Object.prototype.hasOwnProperty.call(o,k)) o[k]=only; };
-        setOnly(j,'variants'); setOnly(j,'compileServiceVariants'); setOnly(j,'platforms'); setOnly(j,'hardwareVariants');
-        if(j.sim && j.sim.hardwareVariants) j.sim.hardwareVariants=only;
-        fs.writeFileSync(p, JSON.stringify(j,null,2));
-        NODE
+        node -e 'const fs=require("fs");
+          const exists=p=>{try{fs.accessSync(p);return true;}catch(_){return false;}};
+          const list=d=>exists(d)?fs.readdirSync(d).map(x=>d+"/"+x):[];
+          const cands=[]
+            .concat(["pxttarget.json","pxt/pxttarget.json"])
+            .concat(list("targets").map(x=>"targets/"+x+"/pxttarget.json"))
+            .filter(exists);
+          if(!cands.length){ console.log("No pxttarget.json found; skipping variant pin."); process.exit(0); }
+          const p=cands[0];
+          console.log("Pinning variants in", p, "to [\"esp32s2\"]");
+          const j=JSON.parse(fs.readFileSync(p,"utf8"));
+          const only=["esp32s2"];
+          const setOnly=(o,k)=>{ if(o && Object.prototype.hasOwnProperty.call(o,k)) o[k]=only; };
+          setOnly(j,"variants");
+          setOnly(j,"compileServiceVariants");
+          setOnly(j,"platforms");
+          setOnly(j,"hardwareVariants");
+          if(j.sim && j.sim.hardwareVariants) j.sim.hardwareVariants=only;
+          fs.writeFileSync(p, JSON.stringify(j,null,2));'
 
+  # 4) Install deps without running scripts, then purge Node types everywhere
   - name: node:18
     id: "Install deps (no scripts) + purge node types"
-    waitFor: ["Pin target to ESP32-S2 only"]
     entrypoint: bash
     args:
       - -lc
@@ -87,12 +82,15 @@ steps:
         set -euo pipefail
         npm config set fund false
         npm config set audit false
+        # Try ci, fall back to install when lockfile is out-of-sync.
         npm ci --ignore-scripts || npm install --ignore-scripts
-        rm -rf node_modules/@types/node pxt/node_modules/@types/node pxt-common-packages/node_modules/@types/node || true
+        rm -rf node_modules/@types/node \
+               pxt/node_modules/@types/node \
+               pxt-common-packages/node_modules/@types/node || true
 
+  # 5) Stage libs: point ./libs at pxt-common-packages/libs and ensure base---light exists
   - name: node:18
     id: "Stage libs"
-    waitFor: ["Install deps (no scripts) + purge node types"]
     entrypoint: bash
     args:
       - -lc
@@ -102,9 +100,9 @@ steps:
         ln -s /workspace/pxt-common-packages/libs ./libs
         [ -d libs/base---light ] || cp -a libs/base libs/base---light
 
+  # 6) Provide stm32 aliases (symlinks) to available esp32/esp32s2 libs so pxt transforms don’t fail
   - name: node:18
     id: "Shim stm32 transforms"
-    waitFor: ["Stage libs"]
     entrypoint: bash
     args:
       - -lc
@@ -141,9 +139,9 @@ steps:
         shim_dir "/workspace/pxt-common-packages/libs"
         shim_dir "/workspace/libs"
 
+  # 7) Stub out *---vm transforms so any "+ ../core---vm" etc. references resolve harmlessly
   - name: node:18
     id: "Stub vm transforms"
-    waitFor: ["Shim stm32 transforms"]
     entrypoint: bash
     args:
       - -lc
@@ -157,15 +155,14 @@ steps:
             d="$lib---vm"
             if [ ! -e "$d" ]; then
               mkdir -p "$d"
-              cat > "$d/pxt.json" <<'JSON'
+              cat > "$d/pxt.json" <<EOF
 {
-  "name": "PLACEHOLDER",
+  "name": "$d",
   "version": "0.0.0",
   "description": "Auto-stub for VM transform; intentionally empty for ESP32-S2.",
   "files": []
 }
-JSON
-              sed -i "s/PLACEHOLDER/$d/g" "$d/pxt.json"
+EOF
               echo "stub: $base/$d"
             fi
           done
@@ -174,20 +171,9 @@ JSON
         make_stub_vm "/workspace/pxt-common-packages/libs"
         make_stub_vm "/workspace/libs"
 
-  - name: node:18
-    id: "Disable sim"
-    waitFor: ["Stub vm transforms"]
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euo pipefail
-        rm -rf /workspace/sim || true
-        echo "PXT_NOSIM will be set on the build step."
-
+  # 8) Build static web (disable simulator)
   - name: node:18
     id: "Build static package"
-    waitFor: ["Disable sim"]
     entrypoint: bash
     env:
       - PXT_NOSIM=1
@@ -197,36 +183,23 @@ JSON
         set -euo pipefail
         echo "Resolved target file(s) (if any):"
         ls -1 node_modules/*/pxttarget.json 2>/dev/null || true
-        timeout 15m npx --yes pxt@0.5.1 staticpkg
+        npx --yes pxt@0.5.1 staticpkg
 
+  # 9) Deploy to Firebase Hosting
   - name: gcr.io/cloud-builders/gcloud
-    id: "Firebase deploy (IAM)"
-    waitFor: ["Build static package"]
+    id: "Firebase deploy"
     entrypoint: bash
     args:
       - -lc
       - |
         set -euo pipefail
+        curl -sL https://firebase.tools | bash
         if [ "$_USE_FIREBASE_TOKEN" = "true" ]; then
-          echo "Skipping IAM deploy because _USE_FIREBASE_TOKEN=true"
-          exit 0
+          if [ -z "${FIREBASE_TOKEN:-}" ]; then
+            echo "FIREBASE_TOKEN env not set, cannot deploy with token." >&2
+            exit 1
+          fi
+          firebase deploy --only "hosting:$_FIREBASE_SITE" --project "$_FIREBASE_PROJECT" --non-interactive --token "$FIREBASE_TOKEN"
+        else
+          firebase deploy --only "hosting:$_FIREBASE_SITE" --project "$_FIREBASE_PROJECT" --non-interactive
         fi
-        curl -sL https://firebase.tools | bash
-        firebase deploy --only "hosting:$_FIREBASE_SITE" --project "$_FIREBASE_PROJECT" --non-interactive
-
-  - name: gcr.io/cloud-builders/gcloud
-    id: "Firebase deploy (token)"
-    waitFor: ["Build static package"]
-    entrypoint: bash
-    secretEnv: ["FIREBASE_TOKEN"]
-    args:
-      - -lc
-      - |
-        set -euo pipefail
-        if [ "$_USE_FIREBASE_TOKEN" != "true" ]; then
-          echo "Skipping token deploy because _USE_FIREBASE_TOKEN!=true"
-          exit 0
-        fi
-        : "$${FIREBASE_TOKEN:?FIREBASE_TOKEN secret not provided}"
-        curl -sL https://firebase.tools | bash
-        firebase deploy --only "hosting:$_FIREBASE_SITE" --project "$_FIREBASE_PROJECT" --non-interactive --token "$$FIREBASE_TOKEN"
