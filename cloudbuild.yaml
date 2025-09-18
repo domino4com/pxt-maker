@@ -3,7 +3,7 @@ timeout: "1200s"
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
-  substitution_option: ALLOW_LOOSE
+  substitutionOption: ALLOW_LOOSE
 
 substitutions:
   _REPO_PXT: https://github.com/domino4com/pxt.git
@@ -19,22 +19,28 @@ availableSecrets:
       env: FIREBASE_TOKEN
 
 steps:
-  # Clone repos
   - name: gcr.io/cloud-builders/git
-    id: Clone pxt
+    id: "Clone pxt"
     waitFor: ["-"]
     entrypoint: bash
-    args: ["-lc", "set -euo pipefail; git clone \"$_REPO_PXT\" pxt"]
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        git clone "$_REPO_PXT" pxt
 
   - name: gcr.io/cloud-builders/git
-    id: Clone pxt-common-packages
+    id: "Clone pxt-common-packages"
     waitFor: ["-"]
     entrypoint: bash
-    args: ["-lc", "set -euo pipefail; git clone \"$_REPO_PKGS\" pxt-common-packages"]
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        git clone "$_REPO_PKGS" pxt-common-packages
 
-  # Prune to ESP32-S2 only
   - name: node:18
-    id: Prune to ESP32-S2
+    id: "Prune to ESP32-S2"
     waitFor: ["Clone pxt", "Clone pxt-common-packages"]
     entrypoint: bash
     args:
@@ -44,9 +50,8 @@ steps:
         chmod +x scripts/prune-for-esp32s2.sh
         ./scripts/prune-for-esp32s2.sh
 
-  # Pin target variants to esp32s2 (no ${...} in Node)
   - name: node:18
-    id: Pin target to ESP32-S2 only
+    id: "Pin target to ESP32-S2 only"
     waitFor: ["Prune to ESP32-S2"]
     entrypoint: bash
     args:
@@ -66,15 +71,14 @@ steps:
         console.log('Pinning variants in '+p+' to ["esp32s2"]');
         const j=JSON.parse(fs.readFileSync(p,'utf8'));
         const only=['esp32s2'];
-        function setOnly(o,k){ if(o && Object.prototype.hasOwnProperty.call(o,k)) o[k]=only; }
+        const setOnly=(o,k)=>{ if(o && Object.prototype.hasOwnProperty.call(o,k)) o[k]=only; };
         setOnly(j,'variants'); setOnly(j,'compileServiceVariants'); setOnly(j,'platforms'); setOnly(j,'hardwareVariants');
         if(j.sim && j.sim.hardwareVariants) j.sim.hardwareVariants=only;
         fs.writeFileSync(p, JSON.stringify(j,null,2));
         NODE
 
-  # Install deps (fall back to npm install) and purge @types/node
   - name: node:18
-    id: Install deps (no scripts) + purge node types
+    id: "Install deps (no scripts) + purge node types"
     waitFor: ["Pin target to ESP32-S2 only"]
     entrypoint: bash
     args:
@@ -86,9 +90,8 @@ steps:
         npm ci --ignore-scripts || npm install --ignore-scripts
         rm -rf node_modules/@types/node pxt/node_modules/@types/node pxt-common-packages/node_modules/@types/node || true
 
-  # Link libs and ensure base---light exists
   - name: node:18
-    id: Stage libs
+    id: "Stage libs"
     waitFor: ["Install deps (no scripts) + purge node types"]
     entrypoint: bash
     args:
@@ -99,9 +102,8 @@ steps:
         ln -s /workspace/pxt-common-packages/libs ./libs
         [ -d libs/base---light ] || cp -a libs/base libs/base---light
 
-  # Shim only ---stm32 transforms to ESP32 variants
   - name: node:18
-    id: Shim stm32 transforms
+    id: "Shim stm32 transforms"
     waitFor: ["Stage libs"]
     entrypoint: bash
     args:
@@ -139,9 +141,8 @@ steps:
         shim_dir "/workspace/pxt-common-packages/libs"
         shim_dir "/workspace/libs"
 
-  # Stub any missing ---vm transforms with minimal pxt.json (neutral no-op)
   - name: node:18
-    id: Stub vm transforms
+    id: "Stub vm transforms"
     waitFor: ["Shim stm32 transforms"]
     entrypoint: bash
     args:
@@ -164,7 +165,6 @@ steps:
   "files": []
 }
 JSON
-              # replace placeholder with actual name
               sed -i "s/PLACEHOLDER/$d/g" "$d/pxt.json"
               echo "stub: $base/$d"
             fi
@@ -174,16 +174,19 @@ JSON
         make_stub_vm "/workspace/pxt-common-packages/libs"
         make_stub_vm "/workspace/libs"
 
-  # Remove simulator to avoid TS errors; also set PXT_NOSIM via env on the build step
   - name: node:18
-    id: Disable sim
+    id: "Disable sim"
     waitFor: ["Stub vm transforms"]
     entrypoint: bash
-    args: ["-lc", "set -euo pipefail; rm -rf /workspace/sim || true"]
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        rm -rf /workspace/sim || true
+        echo "PXT_NOSIM will be set on the build step."
 
-  # Build static package (no sim)
   - name: node:18
-    id: Build static package
+    id: "Build static package"
     waitFor: ["Disable sim"]
     entrypoint: bash
     env:
@@ -192,13 +195,12 @@ JSON
       - -lc
       - |
         set -euo pipefail
-        echo "Resolved target file(s):"
+        echo "Resolved target file(s) (if any):"
         ls -1 node_modules/*/pxttarget.json 2>/dev/null || true
         timeout 15m npx --yes pxt@0.5.1 staticpkg
 
-  # Firebase deploy via IAM (default)
   - name: gcr.io/cloud-builders/gcloud
-    id: Firebase deploy (IAM)
+    id: "Firebase deploy (IAM)"
     waitFor: ["Build static package"]
     entrypoint: bash
     args:
@@ -212,9 +214,8 @@ JSON
         curl -sL https://firebase.tools | bash
         firebase deploy --only "hosting:$_FIREBASE_SITE" --project "$_FIREBASE_PROJECT" --non-interactive
 
-  # Firebase deploy via token (optional)
   - name: gcr.io/cloud-builders/gcloud
-    id: Firebase deploy (token)
+    id: "Firebase deploy (token)"
     waitFor: ["Build static package"]
     entrypoint: bash
     secretEnv: ["FIREBASE_TOKEN"]
