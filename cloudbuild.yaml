@@ -1,4 +1,4 @@
-timeout: "1200s"  # 20 minutes
+timeout: "1200s"
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -19,6 +19,7 @@ availableSecrets:
       env: FIREBASE_TOKEN
 
 steps:
+  # Clone repos
   - name: gcr.io/cloud-builders/git
     id: Clone pxt
     waitFor: ["-"]
@@ -31,6 +32,7 @@ steps:
     entrypoint: bash
     args: ["-lc", "set -euo pipefail; git clone \"$_REPO_PKGS\" pxt-common-packages"]
 
+  # Prune to ESP32-S2 only (your script lives in repo root)
   - name: node:18
     id: Prune to ESP32-S2
     waitFor: ["Clone pxt", "Clone pxt-common-packages"]
@@ -42,6 +44,7 @@ steps:
         chmod +x scripts/prune-for-esp32s2.sh
         ./scripts/prune-for-esp32s2.sh
 
+  # Pin target to ESP32-S2 (avoid ${...} in Node by not using template strings)
   - name: node:18
     id: Pin target to ESP32-S2 only
     waitFor: ["Prune to ESP32-S2"]
@@ -51,25 +54,26 @@ steps:
       - |
         set -euo pipefail
         node - <<'NODE'
-        const fs = require('fs'), path = require('path');
-        const exists = p => { try { fs.accessSync(p); return true; } catch { return false; } };
-        const candidates = [
-          'pxttarget.json',
-          'pxt/pxttarget.json',
-          ... (exists('targets') ? fs.readdirSync('targets').map(d => `targets/${d}/pxttarget.json`) : []),
-          ... (exists('node_modules') ? fs.readdirSync('node_modules').map(d => `node_modules/${d}/pxttarget.json`) : []),
-        ].filter(exists);
-        if (!candidates.length) { console.log('No pxttarget.json found; skipping variant pin.'); process.exit(0); }
-        const p = candidates[0];
-        console.log(`Pinning variants in ${p} to ["esp32s2"]`);
-        const j = JSON.parse(fs.readFileSync(p, 'utf8'));
-        const only = ['esp32s2'];
-        const setOnly = (o,k)=>{ if (o && Object.prototype.hasOwnProperty.call(o,k)) o[k]=only; };
+        const fs=require('fs');
+        const exists=p=>{try{fs.accessSync(p);return true;}catch{return false;}};
+        const list=d=>exists(d)?fs.readdirSync(d).map(x=>d+'/'+x):[];
+        const candidates=[]
+          .concat(['pxttarget.json','pxt/pxttarget.json'])
+          .concat(list('targets').map(x=>'targets/'+x+'/pxttarget.json'))
+          .concat(list('node_modules').map(x=>'node_modules/'+x+'/pxttarget.json'))
+          .filter(exists);
+        if(!candidates.length){ console.log('No pxttarget.json found; skipping variant pin.'); process.exit(0); }
+        const p=candidates[0];
+        console.log('Pinning variants in '+p+' to ["esp32s2"]');
+        const j=JSON.parse(fs.readFileSync(p,'utf8'));
+        const only=['esp32s2'];
+        function setOnly(o,k){ if(o && Object.prototype.hasOwnProperty.call(o,k)) o[k]=only; }
         setOnly(j,'variants'); setOnly(j,'compileServiceVariants'); setOnly(j,'platforms'); setOnly(j,'hardwareVariants');
-        if (j.sim && j.sim.hardwareVariants) j.sim.hardwareVariants = only;
+        if(j.sim && j.sim.hardwareVariants) j.sim.hardwareVariants=only;
         fs.writeFileSync(p, JSON.stringify(j,null,2));
         NODE
 
+  # Install deps without running scripts; remove @types/node that can upset PXT
   - name: node:18
     id: Install deps (no scripts) + purge node types
     waitFor: ["Pin target to ESP32-S2 only"]
@@ -83,6 +87,7 @@ steps:
         npm ci --ignore-scripts || npm install --ignore-scripts
         rm -rf node_modules/@types/node pxt/node_modules/@types/node pxt-common-packages/node_modules/@types/node || true
 
+  # Link libs and ensure base---light exists
   - name: node:18
     id: Stage libs
     waitFor: ["Install deps (no scripts) + purge node types"]
@@ -95,6 +100,7 @@ steps:
         ln -s /workspace/pxt-common-packages/libs ./libs
         [ -d libs/base---light ] || cp -a libs/base libs/base---light
 
+  # Create shims for ---stm32 and ---vm in BOTH ./libs and ./pxt-common-packages/libs
   - name: node:18
     id: Shim stm32 & vm transforms (both trees)
     waitFor: ["Stage libs"]
@@ -105,33 +111,37 @@ steps:
         set -euo pipefail
 
         shim_dir () {
-          local D="$1"
-          [ -d "$D" ] || return 0
-          cd "$D"
-          pick_target() {
-            local name="$1"
-            if   [ -d "${name}---esp32s2" ]; then echo "${name}---esp32s2"
-            elif [ -d "${name}---esp32"   ]; then echo "${name}---esp32"
-            elif [ -d "${name}"           ]; then echo "${name}"
+          dir="$1"
+          [ -d "$dir" ] || return 0
+          cd "$dir"
+
+          pick_target () {
+            nm="$1"
+            if   [ -d "$nm---esp32s2" ]; then echo "$nm---esp32s2"
+            elif [ -d "$nm---esp32"   ]; then echo "$nm---esp32"
+            elif [ -d "$nm"           ]; then echo "$nm"
             else echo ""; fi
           }
-          make_link_if_missing() {
-            local dest="$1" target="$2"
+
+          make_link_if_missing () {
+            dest="$1"; target="$2"
             [ -z "$target" ] && return 0
-            if [ ! -e "$dest" ]; then ln -s "$target" "$dest"; echo "[$D] shim: $dest -> $target"; fi
+            if [ ! -e "$dest" ]; then ln -s "$target" "$dest"; echo "[$dir] shim: $dest -> $target"; fi
           }
+
           for lib in core settings screen serial power display; do
             tgt="$(pick_target "$lib")"
-            make_link_if_missing "${lib}---stm32" "$tgt"
-            make_link_if_missing "${lib}---vm"    "$tgt"
+            make_link_if_missing "$lib---stm32" "$tgt"
+            make_link_if_missing "$lib---vm"    "$tgt"
           done
+
           cd - >/dev/null
         }
 
-        # Create shims where PXT reads from:
         shim_dir "/workspace/libs"
         shim_dir "/workspace/pxt-common-packages/libs"
 
+  # Disable simulator to avoid sim TS errors
   - name: node:18
     id: Disable sim
     waitFor: ["Shim stm32 & vm transforms (both trees)"]
@@ -141,7 +151,10 @@ steps:
       - |
         set -euo pipefail
         rm -rf /workspace/sim || true
+        # some targets also check this
+        echo "PXT_NOSIM=1" >> $HOME/.bashrc
 
+  # Build static package
   - name: node:18
     id: Build static package
     waitFor: ["Disable sim"]
@@ -154,6 +167,7 @@ steps:
         ls -1 node_modules/*/pxttarget.json 2>/dev/null || true
         PXT_NOSIM=1 timeout 15m npx --yes pxt@0.5.1 staticpkg
 
+  # Firebase deploy via IAM (default)
   - name: gcr.io/cloud-builders/gcloud
     id: Firebase deploy (IAM)
     waitFor: ["Build static package"]
@@ -162,13 +176,14 @@ steps:
       - -lc
       - |
         set -euo pipefail
-        if [ "${_USE_FIREBASE_TOKEN}" = "true" ]; then
+        if [ "$_USE_FIREBASE_TOKEN" = "true" ]; then
           echo "Skipping IAM deploy because _USE_FIREBASE_TOKEN=true"
           exit 0
         fi
         curl -sL https://firebase.tools | bash
-        firebase deploy --only "hosting:${_FIREBASE_SITE}" --project "${_FIREBASE_PROJECT}" --non-interactive
+        firebase deploy --only "hosting:$_FIREBASE_SITE" --project "$_FIREBASE_PROJECT" --non-interactive
 
+  # Firebase deploy via token (optional)
   - name: gcr.io/cloud-builders/gcloud
     id: Firebase deploy (token)
     waitFor: ["Build static package"]
@@ -178,10 +193,10 @@ steps:
       - -lc
       - |
         set -euo pipefail
-        if [ "${_USE_FIREBASE_TOKEN}" != "true" ]; then
+        if [ "$_USE_FIREBASE_TOKEN" != "true" ]; then
           echo "Skipping token deploy because _USE_FIREBASE_TOKEN!=true"
           exit 0
         fi
         : "$${FIREBASE_TOKEN:?FIREBASE_TOKEN secret not provided}"
         curl -sL https://firebase.tools | bash
-        firebase deploy --only "hosting:${_FIREBASE_SITE}" --project "${_FIREBASE_PROJECT}" --non-interactive --token "$$FIREBASE_TOKEN"
+        firebase deploy --only "hosting:$_FIREBASE_SITE" --project "$_FIREBASE_PROJECT" --non-interactive --token "$$FIREBASE_TOKEN"
