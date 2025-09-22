@@ -1,18 +1,23 @@
 steps:
-  # Initialize and update submodules (pxt-common-packages and pxt)
-  - name: 'gcr.io/cloud-builders/git'
+  # 0) Initialize and update submodules
+  - id: submodule-init
+    name: gcr.io/cloud-builders/git
     args: ['submodule', 'update', '--init', '--recursive']
-    id: 'submodule-init'
 
-  # Run the prune script to remove non-ESP32-S2 boards (like SAMD, NRF, RP2040)
-  - name: 'ubuntu'
-    script: |
-      chmod +x scripts/prune-for-esp32s2.sh
-      ./scripts/prune-for-esp32s2.sh
-    id: 'prune-boards'
+  # 1) Prune non-ESP32-S2 boards
+  - id: prune-boards
+    name: ubuntu
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euxo pipefail
+        chmod +x scripts/prune-for-esp32s2.sh
+        ./scripts/prune-for-esp32s2.sh
 
-  # Install npm dependencies (toolchain + udev, then npm install)
-  - name: 'node:20'
+  # 2) Install deps (toolchain + udev) and npm packages
+  - id: npm-install
+    name: node:20
     entrypoint: bash
     args:
       - -lc
@@ -23,41 +28,39 @@ steps:
           build-essential g++ libudev-dev
         export CXXFLAGS="-std=gnu++17"
         npm install --unsafe-perm --no-audit --fund=false
-    id: 'npm-install'
 
-# Build the site/editor:
-# - if package.json defines "build", run it
-# - else, prepare the PXT target then package it
-- name: 'node:20'
-  entrypoint: bash
-  args:
-    - -lc
-    - |
-      set -euxo pipefail
-      if npm run | grep -qE ' build( |$)'; then
-        npm run build
-      else
-        # Prepare PXT target (fetch/link common packages, create libs/*)
-        npx -y pxt@latest update
-        # Optional: show versions for debugging
-        npx -y pxt@latest --version
-        # Package static site
-        npx -y pxt@latest staticpkg
-      fi
-  id: 'npm-build'
+  # 3) Build: if a "build" script exists, run it; else PXT target prep + static package
+  - id: npm-build
+    name: node:20
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euxo pipefail
+        if npm run | grep -qE ' build( |$)'; then
+          npm run build
+        else
+          npx -y pxt@latest update
+          npx -y pxt@latest --version
+          npx -y pxt@latest staticpkg
+        fi
 
-  # Deploy to Firebase Hosting (requires FIREBASE_TOKEN and a matching firebase.json)
-  - name: 'gcr.io/cloud-builders/npm'
-    args: ['run', 'deploy']
+  # 4) Deploy to Firebase Hosting
+  - id: firebase-deploy
+    name: gcr.io/cloud-builders/npm
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euxo pipefail
+        npm run deploy
     env:
       - 'FIREBASE_TOKEN=${_FIREBASE_TOKEN}'
-    id: 'firebase-deploy'
+      - 'FIREBASE_PROJECT=springbot-co-za'
 
 options:
-  machineType: 'E2_HIGHCPU_8' # faster builds
+  machineType: E2_HIGHCPU_8
   logging: CLOUD_LOGGING_ONLY
-  env:
-    - 'FIREBASE_PROJECT=springbot-co-za'
 
 substitutions:
-  _FIREBASE_TOKEN: 'your-firebase-token-here' # set in trigger
+  _FIREBASE_TOKEN: 'your-firebase-token-here'
