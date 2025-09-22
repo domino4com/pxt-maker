@@ -5,11 +5,11 @@ steps:
     id: 'submodule-init'
 
   # Run the prune script to remove non-ESP32-S2 boards (like SAMD, NRF, RP2040)
-  - name: 'ubuntu'
-    script: |
-      chmod +x scripts/prune-for-esp32s2.sh
-      ./scripts/prune-for-esp32s2.sh
-    id: 'prune-boards'
+  # - name: 'ubuntu'
+  #   script: |
+  #     chmod +x scripts/prune-for-esp32s2.sh
+  #     ./scripts/prune-for-esp32s2.sh
+  #   id: 'prune-boards'
 
   # Install npm dependencies
   - name: 'node:20'
