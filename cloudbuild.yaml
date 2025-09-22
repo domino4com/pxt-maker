@@ -37,7 +37,7 @@ steps:
         if npm run | grep -qE ' build( |$)'; then
           npm run build
         else
-          npx -y pxt@latest staticpkg --no-prompt
+          npx -y pxt@latest staticpkg
         fi
     id: 'npm-build'
 
