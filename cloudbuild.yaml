@@ -1,71 +1,85 @@
 steps:
-  # 0) Initialize and update submodules
-  - id: submodule-init
-    name: gcr.io/cloud-builders/git
-    args: ['submodule', 'update', '--init', '--recursive']
+# Step 0 - initialize submodules
+- id: submodule-init
+  name: gcr.io/cloud-builders/git
+  entrypoint: bash
+  args:
+    - -c
+    - |
+      git submodule update --init --recursive
 
-  # 1) Install toolchain + udev headers and npm packages
-  - id: npm-install
-    name: node:20
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euxo pipefail
-        apt-get update
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-          build-essential g++ libudev-dev
-        export CXXFLAGS="-std=gnu++17"
-        npm install --unsafe-perm --no-audit --fund=false
+# Step 1 - prune boards (optional: your existing script)
+- id: prune-boards
+  name: ubuntu:latest
+  entrypoint: bash
+  args:
+    - -c
+    - |
+      set -euxo pipefail
+      chmod +x scripts/prune-for-esp32s2.sh
+      ./scripts/prune-for-esp32s2.sh || true
 
-  # 2) Build: if "build" script exists, run it; else prep PXT target and package
-  - id: npm-build
-    name: node:20
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euxo pipefail
-        if npm run | grep -qE ' build( |$)'; then
-          npm run build
-        else
-          # Ensure tracking branch so 'git pull' inside pxt works in Cloud Build
-          git checkout -B master
-          git fetch origin master || true
-          git branch --set-upstream-to=origin/master master || true
+# Step 2 - install npm deps
+- id: npm-install
+  name: node:20
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -euxo pipefail
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential g++ libudev-dev
+      export CXXFLAGS=-std=gnu++17
+      npm install --unsafe-perm --no-audit --fund=false
 
-          # Prepare target and package static site
-          npx -y pxt@latest update
-          npx -y pxt@latest staticpkg
-        fi
+# Step 3 - build and package (optimized for ESP32-S2)
+- id: npm-build
+  name: node:20
+  entrypoint: bash
+  args:
+    - -lc
+    - |
+      set -euxo pipefail
+      if npm run | grep -qE ' build( |$)'; then
+        npm run build
+      else
+        # Ensure tracking branch so 'git pull' works inside Cloud Build
+        git checkout -B master
+        git fetch origin master || true
+        git branch --set-upstream-to=origin/master master || true
 
-  # 3) (Optional) Prune non-ESP32-S2 boards *after* packaging so libs/* remain available during build
-  - id: prune-boards
-    name: ubuntu
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euxo pipefail
-        chmod +x scripts/prune-for-esp32s2.sh
-        ./scripts/prune-for-esp32s2.sh
+        # 1) Prepare PXT target (creates libs/* structure)
+        npx -y pxt@latest update
 
-  # 4) Deploy to Firebase Hosting
-  - id: firebase-deploy
-    name: gcr.io/cloud-builders/npm
-    entrypoint: bash
-    args:
-      - -lc
-      - |
-        set -euxo pipefail
-        npm run deploy
-    env:
-      - 'FIREBASE_TOKEN=${_FIREBASE_TOKEN}'
-      - 'FIREBASE_PROJECT=springbot-co-za'
+        # 2) Prune boards: keep only ESP32 / ESP32-S2 / Springbot boards
+        for d in libs/*; do
+          if [ -d "$d" ] && [ -f "$d/board.json" ]; then
+            case "$d" in
+              *esp32s2*|*esp32*|*springbot*|*jacdac-iot-s2*) : ;;  # keep
+              *) rm -rf "$d" ;;
+            esac
+          fi
+        done
+
+        # Drop platform-specific cores/mixers/settings not for ESP32
+        find libs -maxdepth 1 -type d -name 'core---*' ! -name 'core---esp32*' -exec rm -rf {} +
+        find libs -maxdepth 1 -type d -name 'mixer---*' ! -name 'mixer---esp32*' -exec rm -rf {} +
+        find libs -maxdepth 1 -type d -name 'settings---*' ! -name 'settings---esp32*' -exec rm -rf {} +
+
+        echo "Remaining board packages:"
+        find libs -maxdepth 1 -type d -exec test -f "{}/board.json" \; -print || true
+
+        # 3) Build static site (hex cache now only for ESP32-S2 boards)
+        npx -y pxt@latest staticpkg
+      fi
+
+# Optional: store artifacts (adjust paths as needed)
+artifacts:
+  objects:
+    location: gs://$PROJECT_ID-build-artifacts/springbot
+    paths:
+      - built/**
 
 options:
-  machineType: E2_HIGHCPU_8
   logging: CLOUD_LOGGING_ONLY
-
-substitutions:
-  _FIREBASE_TOKEN: 'your-firebase-token-here'
+  machineType: E2_HIGHCPU_8
