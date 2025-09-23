@@ -5,7 +5,7 @@
     "name": "MakeCode Maker (Cortex class)",
     "title": "MakeCode Maker - Blocks / Javascript editor",
     "description": "A Blocks / JavaScript code editor for MakeCode Maker Boards",
-    "corepkg": "core",
+    "corepkg": "springbot",
     "bundleddirs": [
         "libs/base",
         "libs/core",
