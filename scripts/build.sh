@@ -47,12 +47,11 @@ prune_and_build() {
   # Relax TS checks to avoid incidental type noise in bundled packages
   export PXT_TSARGS="--skipLibCheck"
 
-  echo "==> Set PXT target to maker and update ..."
-  npx -y pxt@latest target maker
+  echo "==> pxt update (align target, core, and packages) ..."
   npx -y pxt@latest update
 
-  echo "==> Install springbot dependencies ..."
-  (cd libs/springbot && npx -y pxt@latest install)
+  echo "==> Build local target ..."
+  npx -y pxt@latest build --local
 
   echo "==> Final @types/node guard after update ..."
   strip_node_types
