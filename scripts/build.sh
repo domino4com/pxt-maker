@@ -47,9 +47,6 @@ prune_and_build() {
   # Relax TS checks to avoid incidental type noise in bundled packages
   export PXT_TSARGS="--skipLibCheck"
 
-  echo "==> pxt install (ensure all dependencies are present) ..."
-  npx -y pxt@latest install
-
   echo "==> pxt update (align target, core, and packages) ..."
   npx -y pxt@latest update
 
