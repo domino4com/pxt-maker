@@ -8,13 +8,24 @@ cd "$(dirname "$0")/.."
 
 phase="${1:-all}"
 
+strip_node_types() {
+  # Remove any direct references so PXT’s TypeScript (older) won’t parse Node 18+ dts.
+  npm pkg delete devDependencies["@types/node"] >/dev/null 2>&1 || true
+  npm pkg delete dependencies["@types/node"] >/dev/null 2>&1 || true
+  rm -rf node_modules/@types/node || true
+}
+
 install_deps() {
   echo "==> Installing system deps (compiler, libudev) ..."
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
   apt-get install -y --no-install-recommends build-essential g++ libudev-dev
+
   # Ensure C++17 for native modules (e.g., usb)
   export CXXFLAGS="-std=gnu++17"
+
+  echo "==> Removing @types/node (pre-install guard) ..."
+  strip_node_types
 
   echo "==> npm install (no audit/fund noise) ..."
   npm install --unsafe-perm --no-audit --fund=false
@@ -26,17 +37,20 @@ prune_and_build() {
   git fetch origin master
   git branch --set-upstream-to=origin/master master || true
 
-  echo "==> Minimal prune to only keep springbot (esp32-s2) and its transitive deps ..."
-  bash scripts/prune-minimal.sh
+  echo "==> Prune: keep ONLY board package libs/springbot, remove other *board* packages"
+  bash scripts/prune-boards-only.sh
 
-  echo "==> Remove @types/node to avoid TS syntax mismatches with PXT's TS version ..."
-  rm -rf node_modules/@types/node || true
+  echo "==> Remove @types/node again (guard around pxt update’s npm step) ..."
+  strip_node_types
 
-  # Relax TS checks that aren't relevant to our target build
+  # Relax TS checks to avoid incidental type noise in bundled packages
   export PXT_TSARGS="--skipLibCheck"
 
   echo "==> pxt update (align target, core, and packages) ..."
   npx -y pxt@latest update
+
+  echo "==> Final @types/node guard after update ..."
+  strip_node_types
 
   echo "==> pxt staticpkg (package editor/site for hosting) ..."
   npx -y pxt@latest staticpkg
