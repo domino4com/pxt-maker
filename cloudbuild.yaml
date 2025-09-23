@@ -1,10 +1,10 @@
 steps:
-  # 0) Initialize and update submodules
+  # 0) Initialize submodules (if any)
   - id: submodule-init
     name: gcr.io/cloud-builders/git
     args: ['submodule', 'update', '--init', '--recursive']
 
-  # 1) Install toolchain + udev headers and npm packages
+  # 1) Toolchain & npm install (includes libudev for node-usb)
   - id: npm-install
     name: node:20
     entrypoint: bash
@@ -18,7 +18,7 @@ steps:
         export CXXFLAGS="-std=gnu++17"
         npm install --unsafe-perm --no-audit --fund=false
 
-  # 2) Build/package with PXT (latest); prune non-ESP32 boards AFTER pxt update
+  # 2) Build with PXT and aggressive prune (whitelist)
   - id: npm-build
     name: node:20
     entrypoint: bash
@@ -27,41 +27,72 @@ steps:
       - |
         set -euxo pipefail
 
-        # If repo provides a build script, use it
+        # Use project build if it exists, otherwise proceed with PXT path
         if npm run | grep -qE ' build( |$)'; then
           npm run build
           exit 0
         fi
 
-        # Ensure tracking branch so `git pull` inside PXT works in Cloud Build
+        # Make sure 'git pull' inside PXT won't explode in Cloud Build
         git checkout -B master
         git fetch origin master || true
         git branch --set-upstream-to=origin/master master || true
 
-        # MakeCode/TypeScript guard (prevents @types/node lib errors)
+        # TypeScript guard to avoid @types/node lib checking issues
         export PXT_TSARGS="--skipLibCheck"
 
-        # Prepare target (creates libs/* incl. libs/base)
+        # Prepare target (populates libs/* etc.)
         npx -y pxt@latest update
 
-        # PRUNE: keep only ESP32-S2 / Springbot board packages.
-        # IMPORTANT: Only delete dirs that contain a board.json (i.e., board packages).
+        # --------- HARD PRUNE (whitelist) ----------
+        # Keep only the Springbot board and the minimum libs Springbot on ESP32-S2 needs.
+        # Adjust the whitelist if Springbot needs additional libs.
+        KEEP="
+        libs/base
+        libs/core
+        libs/core---esp32s2
+        libs/esp32
+        libs/wifi---esp32
+        libs/settings
+        libs/settings---esp32
+        libs/serial
+        libs/storage
+        libs/pixel
+        libs/springbot
+        "
+
+        # normalize KEEP list to newline-separated absolute paths
+        KEEP_LIST=$(printf "%s\n" $KEEP | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')
+
+        # 2a) Remove all board packages except Springbot / ESP32-S2 ones
         for d in libs/*; do
           if [ -d "$d" ] && [ -f "$d/board.json" ]; then
             case "$d" in
-              *esp32s2*|*springbot*) : ;;  # keep
+              *springbot*|*esp32s2*) : ;;   # keep Springbot / ESP32-S2 boards
               *) rm -rf "$d" ;;
             esac
           fi
         done
 
-        echo "Remaining board packages (post-prune):" || true
-        find libs -maxdepth 1 -type d -exec test -f "{}/board.json" \; -print || true
+        # 2b) Remove any library folder not explicitly whitelisted
+        for d in libs/*; do
+          if [ -d "$d" ] && [ ! -f "$d/board.json" ]; then
+            # if $d is NOT in KEEP_LIST -> remove it
+            if ! printf "%s\n" "$KEEP_LIST" | grep -qx "$d"; then
+              rm -rf "$d"
+            fi
+          fi
+        done
 
-        # Package static site; hex cache will build only for remaining boards
+        echo "Remaining boards:"
+        find libs -maxdepth 1 -type d -exec test -f "{}/board.json" \; -print || true
+        echo "Remaining libs:"
+        find libs -maxdepth 1 -type d -not -name "*.*" -exec sh -c 'test ! -f "{}/board.json" && echo "{}"' \; || true
+
+        # Build static site (editor + target)
         npx -y pxt@latest staticpkg
 
-  # 3) Deploy to Firebase Hosting
+  # 3) Deploy (uses your existing npm script)
   - id: firebase-deploy
     name: gcr.io/cloud-builders/npm
     entrypoint: bash
