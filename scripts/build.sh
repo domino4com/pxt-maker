@@ -27,6 +27,7 @@ install_deps() {
   echo "==> Removing @types/node (pre-install guard) ..."
   strip_node_types
 
+  rm -rf node_modules || true # Clean up previous installations
   echo "==> npm install (no audit/fund noise) ..."
   npm install --unsafe-perm --no-audit --fund=false
 }
@@ -45,6 +46,9 @@ prune_and_build() {
 
   # Relax TS checks to avoid incidental type noise in bundled packages
   export PXT_TSARGS="--skipLibCheck"
+
+  echo "==> pxt install (ensure all dependencies are present) ..."
+  npx -y pxt@latest install
 
   echo "==> pxt update (align target, core, and packages) ..."
   npx -y pxt@latest update
