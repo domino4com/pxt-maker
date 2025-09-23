@@ -53,7 +53,7 @@ prune_and_build() {
   strip_node_types
 
   echo "==> pxt staticpkg (package editor/site for hosting) ..."
-  npx -y pxt@latest staticpkg --target esp32s2 --local-packages libs/springbot
+  npx -y pxt@latest staticpkg
 }
 
 case "${phase}" in
